@@ -1,6 +1,7 @@
 /**
  * MS Teams Briefing Agent - Frontend Application
  * Connects to Salesforce Agentforce via Agent API
+ * Auto sign-in — no manual authentication required
  */
 
 class TeamsApp {
@@ -12,8 +13,6 @@ class TeamsApp {
     this.isProcessing = false;
 
     this.els = {
-      authOverlay: document.getElementById('authOverlay'),
-      authStatus: document.getElementById('authStatus'),
       messagesContainer: document.getElementById('messagesContainer'),
       welcomeSection: document.getElementById('welcomeSection'),
       messageInput: document.getElementById('messageInput'),
@@ -35,8 +34,7 @@ class TeamsApp {
 
   async init() {
     this.bindEvents();
-    await this.checkAuth();
-    this.handleUrlParams();
+    await this.connectToSalesforce();
   }
 
   bindEvents() {
@@ -62,19 +60,10 @@ class TeamsApp {
     this.els.fileUploadRemove.addEventListener('click', () => this.removeFile());
   }
 
-  handleUrlParams() {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('auth_success') === 'true') {
-      this.showNotification('Successfully connected to Salesforce!', 'success');
-      window.history.replaceState({}, '', '/');
-    }
-    if (params.get('auth_error')) {
-      this.showNotification('Authentication failed: ' + params.get('auth_error'), 'error');
-      window.history.replaceState({}, '', '/');
-    }
-  }
+  async connectToSalesforce() {
+    this.els.connectionStatus.textContent = 'Connecting...';
+    this.els.connectionStatus.style.color = '#c8c6c4';
 
-  async checkAuth() {
     try {
       const res = await fetch('/api/auth/status');
       const data = await res.json();
@@ -82,7 +71,6 @@ class TeamsApp {
       this.authenticated = data.authenticated;
 
       if (this.authenticated) {
-        this.els.authOverlay.classList.add('hidden');
         this.els.connectionStatus.textContent = 'Online';
         this.els.connectionStatus.style.color = '#92c353';
 
@@ -97,11 +85,17 @@ class TeamsApp {
         // Create agent session
         await this.createAgentSession();
       } else {
-        this.els.authOverlay.classList.remove('hidden');
+        // Server not yet authenticated — retry after a short delay
+        this.els.connectionStatus.textContent = 'Waiting for connection...';
+        this.els.connectionStatus.style.color = '#f0a30a';
+        this.addSystemMessage('Connecting to Salesforce... Please wait.');
+        setTimeout(() => this.connectToSalesforce(), 3000);
       }
     } catch (err) {
-      console.error('Auth check failed:', err);
-      this.els.authOverlay.classList.remove('hidden');
+      console.error('Connection check failed:', err);
+      this.els.connectionStatus.textContent = 'Connection failed';
+      this.els.connectionStatus.style.color = '#c4314b';
+      this.addSystemMessage('Could not connect to server. Please refresh the page.');
     }
   }
 
@@ -122,15 +116,9 @@ class TeamsApp {
       }
     } catch (err) {
       console.error('Agent session error:', err);
-      this.els.connectionStatus.textContent = 'Connection failed';
+      this.els.connectionStatus.textContent = 'Agent unavailable';
       this.els.connectionStatus.style.color = '#c4314b';
-
-      if (err.message?.includes('re-authenticate') || err.message?.includes('401')) {
-        this.addSystemMessage('Session expired. Please reconnect to Salesforce.');
-        this.els.authOverlay.classList.remove('hidden');
-      } else {
-        this.addSystemMessage('Could not connect to the Briefing Agent. Please try refreshing the page.');
-      }
+      this.addSystemMessage('Could not connect to the Briefing Agent. Please try refreshing the page.');
     }
   }
 
@@ -140,7 +128,7 @@ class TeamsApp {
     if (this.isProcessing) return;
 
     if (!this.authenticated) {
-      this.els.authOverlay.classList.remove('hidden');
+      this.addSystemMessage('Not connected to Salesforce yet. Please wait...');
       return;
     }
 
@@ -226,9 +214,9 @@ class TeamsApp {
       if (data.success && data.response) {
         this.renderAgentResponse(data.response);
       } else if (data.needsReauth) {
-        this.addSystemMessage('Session expired. Reconnecting...');
+        this.addSystemMessage('Salesforce connection lost. Reconnecting...');
         this.authenticated = false;
-        this.els.authOverlay.classList.remove('hidden');
+        setTimeout(() => this.connectToSalesforce(), 2000);
       } else {
         throw new Error(data.error || 'No response from agent');
       }

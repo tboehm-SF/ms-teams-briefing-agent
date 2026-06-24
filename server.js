@@ -3,7 +3,7 @@ const express = require('express');
 const session = require('express-session');
 const multer = require('multer');
 const path = require('path');
-const authRoutes = require('./routes/auth');
+const { authenticate, getAuth } = require('./routes/auth');
 const agentRoutes = require('./routes/agent');
 
 const app = express();
@@ -53,7 +53,6 @@ if (process.env.NODE_ENV === 'production') {
 app.set('upload', upload);
 
 // Routes
-app.use('/auth', authRoutes);
 app.use('/api/agent', agentRoutes);
 
 // Main page
@@ -61,12 +60,13 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'views', 'index.html'));
 });
 
-// Auth status endpoint
+// Auth status endpoint — returns global auth state (auto sign-in)
 app.get('/api/auth/status', (req, res) => {
+  const auth = getAuth();
   res.json({
-    authenticated: !!req.session.sfAccessToken,
-    instanceUrl: req.session.sfInstanceUrl || null,
-    username: req.session.sfUsername || null
+    authenticated: auth.authenticated,
+    instanceUrl: auth.instanceUrl || null,
+    username: auth.username || null
   });
 });
 
@@ -125,6 +125,18 @@ async function extractText(file) {
   return '[Unsupported file format]';
 }
 
-app.listen(PORT, () => {
-  console.log(`MS Teams Briefing Agent running on port ${PORT}`);
-});
+// Auto-authenticate to Salesforce, then start the server
+async function startServer() {
+  const authSuccess = await authenticate();
+  if (authSuccess) {
+    console.log('Salesforce auto sign-in successful!');
+  } else {
+    console.warn('WARNING: Salesforce auto sign-in failed. Check your SF_USERNAME, SF_PASSWORD, SF_CLIENT_ID, SF_CLIENT_SECRET environment variables.');
+  }
+
+  app.listen(PORT, () => {
+    console.log(`MS Teams Briefing Agent running on port ${PORT}`);
+  });
+}
+
+startServer();
