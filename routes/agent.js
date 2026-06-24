@@ -6,6 +6,10 @@ const router = express.Router();
 // Apex Action endpoint for creating hospitality events
 const APEX_ACTION_PATH = '/services/data/v63.0/actions/custom/apex/CreateHospitalityEventAction';
 
+// Valid picklist values (from Salesforce org)
+const VALID_DRESS_CODES = ['Business', 'Smart Casual', 'Casual', 'Formal'];
+const VALID_EVENT_TYPES = ['Kundenanlass', 'Networking', 'Webinar', 'Messe', 'Generalversammlung', 'Mitarbeiteranlass'];
+
 // Concurrency control
 const MAX_CONCURRENT_REQUESTS = 10;
 let activeRequests = 0;
@@ -222,20 +226,19 @@ function extractBriefingData(text) {
   const typePatterns = [
     /(?:Event[- ]?Typ|Typ|Art|Type|Kategorie)\s*[:=]\s*(.+?)$/im
   ];
-  const validTypes = ['Kundenanlass', 'Networking', 'Webinar', 'Messe', 'Generalversammlung', 'Mitarbeiteranlass'];
   for (const p of typePatterns) {
     const m = text.match(p);
     if (m) {
       const val = m[1].trim();
-      // Try to match to a valid type
-      const match = validTypes.find(t => t.toLowerCase() === val.toLowerCase() || val.toLowerCase().includes(t.toLowerCase()));
-      data.eventType = match || val;
+      // Try to match to a valid picklist type
+      const match = VALID_EVENT_TYPES.find(t => t.toLowerCase() === val.toLowerCase() || val.toLowerCase().includes(t.toLowerCase()));
+      data.eventType = match || 'Kundenanlass'; // default
       break;
     }
   }
   // Also scan for type keywords in full text
   if (!data.eventType) {
-    for (const t of validTypes) {
+    for (const t of VALID_EVENT_TYPES) {
       if (text.toLowerCase().includes(t.toLowerCase())) {
         data.eventType = t;
         break;
@@ -243,13 +246,30 @@ function extractBriefingData(text) {
     }
   }
 
-  // Dress code
+  // Dress code — map to valid picklist values: Business, Smart Casual, Casual, Formal
   const dressPatterns = [
     /(?:Dress[- ]?Code|Kleiderordnung|Kleidung)\s*[:=]\s*(.+?)$/im
   ];
   for (const p of dressPatterns) {
     const m = text.match(p);
-    if (m) { data.dressCode = m[1].trim(); break; }
+    if (m) {
+      const raw = m[1].trim().toLowerCase();
+      // Map common variations to valid picklist values
+      if (raw.includes('formal') || raw.includes('abend')) {
+        data.dressCode = 'Formal';
+      } else if (raw.includes('smart casual') || raw.includes('business casual') || raw.includes('smart')) {
+        data.dressCode = 'Smart Casual';
+      } else if (raw.includes('business')) {
+        data.dressCode = 'Business';
+      } else if (raw.includes('casual') || raw.includes('leger') || raw.includes('zwanglos')) {
+        data.dressCode = 'Casual';
+      } else {
+        // Try exact match
+        const match = VALID_DRESS_CODES.find(v => v.toLowerCase() === raw);
+        data.dressCode = match || 'Smart Casual'; // default
+      }
+      break;
+    }
   }
 
   // Catering
