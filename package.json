@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "stress-test": "node tests/stress-test.js",
+    "stress-test:local": "node tests/stress-test.js http://localhost:3000"
   },
   "engines": {
     "node": ">=18.x"

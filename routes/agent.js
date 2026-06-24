@@ -7,58 +7,151 @@ const router = express.Router();
 const AGENT_ID = process.env.SF_AGENT_ID || '0XxJ60000009XUqKAM';
 const AGENT_API_BASE = '/services/einstein/ai-agent/v1';
 
+// Concurrency control
+const MAX_CONCURRENT_REQUESTS = 10;
+let activeRequests = 0;
+const requestQueue = [];
+
+// Metrics
+const metrics = {
+  sessionsCreated: 0,
+  sessionsFailed: 0,
+  messagesSent: 0,
+  messagesFailed: 0,
+  sessionsEnded: 0,
+  totalLatencyMs: 0,
+  requestCount: 0
+};
+
+/**
+ * Structured log helper
+ */
+function log(level, message, data = {}) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    component: 'agent-api',
+    message,
+    ...data
+  };
+  if (level === 'error') {
+    console.error(JSON.stringify(entry));
+  } else {
+    console.log(JSON.stringify(entry));
+  }
+}
+
+/**
+ * Concurrency limiter — queues requests when at max capacity
+ */
+function acquireSlot() {
+  return new Promise((resolve) => {
+    if (activeRequests < MAX_CONCURRENT_REQUESTS) {
+      activeRequests++;
+      resolve();
+    } else {
+      requestQueue.push(resolve);
+    }
+  });
+}
+
+function releaseSlot() {
+  activeRequests--;
+  if (requestQueue.length > 0) {
+    activeRequests++;
+    const next = requestQueue.shift();
+    next();
+  }
+}
+
+/**
+ * Make an authenticated Salesforce API call with automatic retry on 401
+ */
+async function sfApiCall(method, url, data = null, options = {}) {
+  const startTime = Date.now();
+  const auth = getAuth();
+
+  if (!auth.authenticated) {
+    throw new Error('Salesforce not authenticated');
+  }
+
+  const config = {
+    method,
+    url: `${auth.instanceUrl}${url}`,
+    headers: {
+      'Authorization': `Bearer ${auth.accessToken}`,
+      'Content-Type': 'application/json',
+      ...options.headers
+    },
+    timeout: options.timeout || 120000
+  };
+
+  if (data) {
+    config.data = data;
+  }
+
+  try {
+    const response = await axios(config);
+    const latency = Date.now() - startTime;
+    metrics.totalLatencyMs += latency;
+    metrics.requestCount++;
+    return response;
+  } catch (err) {
+    // On 401, try refreshing auth and retry once
+    if (err.response?.status === 401) {
+      log('warn', 'Received 401, attempting token refresh');
+      const refreshed = await refreshAuth();
+      if (refreshed) {
+        const freshAuth = getAuth();
+        config.headers['Authorization'] = `Bearer ${freshAuth.accessToken}`;
+        config.url = `${freshAuth.instanceUrl}${url}`;
+        const retryResponse = await axios(config);
+        const latency = Date.now() - startTime;
+        metrics.totalLatencyMs += latency;
+        metrics.requestCount++;
+        return retryResponse;
+      }
+      const error = new Error('Authentication expired and refresh failed');
+      error.needsReauth = true;
+      throw error;
+    }
+    throw err;
+  }
+}
+
 // Middleware: check global auth
 function requireAuth(req, res, next) {
   const auth = getAuth();
   if (!auth.authenticated) {
     return res.status(401).json({ error: 'Salesforce not authenticated. Server may still be starting up.' });
   }
-  // Attach auth to request for convenience
   req.sfAuth = auth;
   next();
 }
 
 // Create agent session
 router.post('/session', requireAuth, async (req, res) => {
+  await acquireSlot();
   try {
-    const { accessToken, instanceUrl } = req.sfAuth;
-    const url = `${instanceUrl}${AGENT_API_BASE}/agents/${AGENT_ID}/sessions`;
+    const url = `${AGENT_API_BASE}/agents/${AGENT_ID}/sessions`;
 
-    const response = await axios.post(url, {}, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    log('info', 'Creating agent session', { agentId: AGENT_ID });
+
+    const response = await sfApiCall('post', url, {});
+
+    metrics.sessionsCreated++;
+    log('info', 'Agent session created', { sessionId: response.data.sessionId });
 
     res.json({
       success: true,
       sessionId: response.data.sessionId
     });
   } catch (err) {
-    console.error('Session creation error:', err.response?.data || err.message);
+    metrics.sessionsFailed++;
+    const errorDetail = err.response?.data || err.message;
+    log('error', 'Session creation failed', { error: errorDetail });
 
-    // If 401, try to refresh and retry once
-    if (err.response?.status === 401) {
-      const refreshed = await refreshAuth();
-      if (refreshed) {
-        try {
-          const auth = getAuth();
-          const url = `${auth.instanceUrl}${AGENT_API_BASE}/agents/${AGENT_ID}/sessions`;
-          const retryResponse = await axios.post(url, {}, {
-            headers: {
-              'Authorization': `Bearer ${auth.accessToken}`,
-              'Content-Type': 'application/json'
-            }
-          });
-          return res.json({
-            success: true,
-            sessionId: retryResponse.data.sessionId
-          });
-        } catch (retryErr) {
-          console.error('Retry session creation failed:', retryErr.response?.data || retryErr.message);
-        }
-      }
+    if (err.needsReauth) {
       return res.status(401).json({
         error: 'Salesforce authentication expired and refresh failed.',
         needsReauth: true
@@ -67,39 +160,49 @@ router.post('/session', requireAuth, async (req, res) => {
 
     res.status(500).json({
       error: 'Failed to create agent session',
-      detail: err.response?.data || err.message
+      detail: errorDetail
     });
+  } finally {
+    releaseSlot();
   }
 });
 
 // Send message to agent
 router.post('/message', requireAuth, async (req, res) => {
+  await acquireSlot();
   try {
     const { sessionId, message } = req.body;
 
     if (!sessionId || !message) {
+      releaseSlot();
       return res.status(400).json({ error: 'sessionId and message are required' });
     }
 
-    const { accessToken, instanceUrl } = req.sfAuth;
-    const url = `${instanceUrl}${AGENT_API_BASE}/sessions/${sessionId}/messages`;
+    const url = `${AGENT_API_BASE}/sessions/${sessionId}/messages`;
 
-    const response = await axios.post(url, {
+    log('info', 'Sending message to agent', {
+      sessionId,
+      messageLength: message.length
+    });
+
+    const response = await sfApiCall('post', url, {
       message: {
         sequenceId: Date.now(),
         type: 'Text',
         text: message
       }
-    }, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 120000 // 2 min timeout for agent processing
-    });
+    }, { timeout: 120000 });
+
+    metrics.messagesSent++;
 
     // Parse agent response
     const agentResponse = parseAgentResponse(response.data);
+
+    log('info', 'Agent response received', {
+      sessionId,
+      responseLength: agentResponse.text.length,
+      hasEventLink: agentResponse.hasEventLink
+    });
 
     res.json({
       success: true,
@@ -107,39 +210,11 @@ router.post('/message', requireAuth, async (req, res) => {
       raw: response.data
     });
   } catch (err) {
-    console.error('Message error:', err.response?.data || err.message);
+    metrics.messagesFailed++;
+    const errorDetail = err.response?.data || err.message;
+    log('error', 'Message send failed', { error: errorDetail });
 
-    // If 401, try to refresh and retry once
-    if (err.response?.status === 401) {
-      const refreshed = await refreshAuth();
-      if (refreshed) {
-        try {
-          const auth = getAuth();
-          const { sessionId, message } = req.body;
-          const url = `${auth.instanceUrl}${AGENT_API_BASE}/sessions/${sessionId}/messages`;
-          const retryResponse = await axios.post(url, {
-            message: {
-              sequenceId: Date.now(),
-              type: 'Text',
-              text: message
-            }
-          }, {
-            headers: {
-              'Authorization': `Bearer ${auth.accessToken}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 120000
-          });
-          const agentResponse = parseAgentResponse(retryResponse.data);
-          return res.json({
-            success: true,
-            response: agentResponse,
-            raw: retryResponse.data
-          });
-        } catch (retryErr) {
-          console.error('Retry message failed:', retryErr.response?.data || retryErr.message);
-        }
-      }
+    if (err.needsReauth) {
       return res.status(401).json({
         error: 'Salesforce authentication expired and refresh failed.',
         needsReauth: true
@@ -148,8 +223,10 @@ router.post('/message', requireAuth, async (req, res) => {
 
     res.status(500).json({
       error: 'Failed to send message to agent',
-      detail: err.response?.data || err.message
+      detail: errorDetail
     });
+  } finally {
+    releaseSlot();
   }
 });
 
@@ -161,20 +238,19 @@ router.post('/end', requireAuth, async (req, res) => {
       return res.json({ success: true });
     }
 
-    const { accessToken, instanceUrl } = req.sfAuth;
-    const url = `${instanceUrl}${AGENT_API_BASE}/sessions/${sessionId}`;
+    const url = `${AGENT_API_BASE}/sessions/${sessionId}`;
 
-    await axios.delete(url, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    log('info', 'Ending agent session', { sessionId });
+
+    await sfApiCall('delete', url);
+    metrics.sessionsEnded++;
 
     res.json({ success: true });
   } catch (err) {
     // Non-critical, session might have expired
-    console.error('End session error:', err.response?.data || err.message);
+    log('warn', 'End session error (non-critical)', {
+      error: err.response?.data || err.message
+    });
     res.json({ success: true, warning: 'Session may have already ended' });
   }
 });
@@ -184,12 +260,18 @@ function parseAgentResponse(data) {
   let text = '';
   let actions = [];
 
+  // Handle the standard Agent API response format
   if (data.messages && Array.isArray(data.messages)) {
     for (const msg of data.messages) {
-      if (msg.type === 'Text' || msg.type === 'text') {
+      const msgType = (msg.type || '').toLowerCase();
+      if (msgType === 'text' || msgType === 'informativetext' || msgType === 'informative') {
         text += (msg.text || msg.message || '') + '\n';
-      } else if (msg.type === 'InformativeText' || msg.type === 'informative') {
-        text += (msg.text || msg.message || '') + '\n';
+      } else if (msgType === 'error') {
+        log('warn', 'Agent returned error message', { errorText: msg.text || msg.message });
+        text += '[Error] ' + (msg.text || msg.message || 'Unknown agent error') + '\n';
+      } else if (msgType === 'endofturn') {
+        // End of turn — agent finished processing
+        log('info', 'Agent end of turn received');
       }
     }
   }
@@ -205,7 +287,7 @@ function parseAgentResponse(data) {
     text = typeof data.response === 'string' ? data.response : JSON.stringify(data.response);
   }
 
-  // Clean up: remove double newlines
+  // Clean up: remove excessive newlines
   text = text.replace(/\n{3,}/g, '\n\n').trim();
 
   return {
@@ -215,4 +297,21 @@ function parseAgentResponse(data) {
   };
 }
 
+/**
+ * Get agent metrics for health check
+ */
+function getAgentMetrics() {
+  return {
+    ...metrics,
+    activeRequests,
+    queuedRequests: requestQueue.length,
+    maxConcurrent: MAX_CONCURRENT_REQUESTS,
+    avgLatencyMs: metrics.requestCount > 0
+      ? Math.round(metrics.totalLatencyMs / metrics.requestCount)
+      : 0,
+    agentId: AGENT_ID
+  };
+}
+
 module.exports = router;
+module.exports.getAgentMetrics = getAgentMetrics;

@@ -3,8 +3,9 @@ const express = require('express');
 const session = require('express-session');
 const multer = require('multer');
 const path = require('path');
-const { authenticate, getAuth } = require('./routes/auth');
+const { authenticate, getAuth, getAuthHealth } = require('./routes/auth');
 const agentRoutes = require('./routes/agent');
+const { getAgentMetrics } = require('./routes/agent');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -67,6 +68,26 @@ app.get('/api/auth/status', (req, res) => {
     authenticated: auth.authenticated,
     instanceUrl: auth.instanceUrl || null,
     username: auth.username || null
+  });
+});
+
+// Health check endpoint — for monitoring and stress testing
+app.get('/api/health', (req, res) => {
+  const authHealth = getAuthHealth();
+  const agentMetrics = getAgentMetrics();
+
+  const status = authHealth.authenticated ? 'healthy' : 'degraded';
+
+  res.json({
+    status,
+    uptime: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+    auth: authHealth,
+    agent: agentMetrics,
+    memory: {
+      rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + ' MB',
+      heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB'
+    }
   });
 });
 
