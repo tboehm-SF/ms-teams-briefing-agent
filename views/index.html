@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Microsoft Teams</title>
+  <link rel="stylesheet" href="/css/teams.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%235b5fc7'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white' font-family='Segoe UI,sans-serif' font-weight='700'>T</text></svg>">
+</head>
+<body>
+
+<!-- Title Bar (Windows-style) -->
+<div class="title-bar">
+  <span class="title-bar-text">Microsoft Teams</span>
+  <div class="title-bar-controls">
+    <button class="title-bar-btn">&#x2212;</button>
+    <button class="title-bar-btn">&#x25A1;</button>
+    <button class="title-bar-btn close">&#x2715;</button>
+  </div>
+</div>
+
+<div class="app-container">
+
+  <!-- Left App Rail -->
+  <nav class="app-rail">
+    <div class="rail-item" title="Activity">
+      <span class="rail-icon">&#x1F514;</span>
+      <span class="rail-label">Activity</span>
+    </div>
+    <div class="rail-item active" title="Chat">
+      <span class="rail-icon">&#x1F4AC;</span>
+      <span class="rail-label">Chat</span>
+    </div>
+    <div class="rail-item" title="Teams">
+      <span class="rail-icon">&#x1F465;</span>
+      <span class="rail-label">Teams</span>
+    </div>
+    <div class="rail-item" title="Calendar">
+      <span class="rail-icon">&#x1F4C5;</span>
+      <span class="rail-label">Calendar</span>
+    </div>
+    <div class="rail-item" title="Calls">
+      <span class="rail-icon">&#x1F4DE;</span>
+      <span class="rail-label">Calls</span>
+    </div>
+    <div class="rail-item" title="Files">
+      <span class="rail-icon">&#x1F4C1;</span>
+      <span class="rail-label">Files</span>
+    </div>
+    <div class="rail-spacer"></div>
+    <div class="rail-item" title="Apps">
+      <span class="rail-icon">&#x2699;</span>
+    </div>
+    <div class="rail-avatar" title="Profile">
+      <span id="profileInitial">U</span>
+    </div>
+  </nav>
+
+  <!-- Chat Sidebar -->
+  <aside class="chat-sidebar">
+    <div class="sidebar-header">
+      <h2 class="sidebar-title">Chat</h2>
+      <div class="sidebar-actions">
+        <button class="sidebar-action-btn" title="Filter">&#x1F50D;</button>
+        <button class="sidebar-action-btn" title="New chat">&#x270F;</button>
+      </div>
+    </div>
+
+    <div class="sidebar-search">
+      <input type="text" placeholder="Search" />
+    </div>
+
+    <div class="chat-list">
+      <!-- Active: Briefing Agent -->
+      <div class="chat-list-item active" data-chat="agent">
+        <div class="chat-avatar bot">
+          <span>&#x1F916;</span>
+          <span class="status-dot online"></span>
+        </div>
+        <div class="chat-preview">
+          <div class="chat-preview-name">Briefing Agent <span class="badge">BOT</span></div>
+          <div class="chat-preview-msg">Upload a briefing to create an event...</div>
+        </div>
+        <span class="chat-preview-time">Now</span>
+      </div>
+
+      <!-- Mock chats -->
+      <div class="chat-list-item" data-chat="mock1">
+        <div class="chat-avatar user" style="background:#0078d4">
+          <span>AS</span>
+          <span class="status-dot online"></span>
+        </div>
+        <div class="chat-preview">
+          <div class="chat-preview-name">Anna Schmidt</div>
+          <div class="chat-preview-msg">Hast du das Briefing schon erhalten?</div>
+        </div>
+        <span class="chat-preview-time">10:32</span>
+      </div>
+
+      <div class="chat-list-item" data-chat="mock2">
+        <div class="chat-avatar team" style="background:#cc4a31">
+          <span>EM</span>
+          <span class="status-dot away"></span>
+        </div>
+        <div class="chat-preview">
+          <div class="chat-preview-name">Event Management Team</div>
+          <div class="chat-preview-msg">Thomas: Die Agenda wurde aktualisiert</div>
+        </div>
+        <span class="chat-preview-time">09:15</span>
+      </div>
+
+      <div class="chat-list-item" data-chat="mock3">
+        <div class="chat-avatar user" style="background:#498205">
+          <span>MK</span>
+          <span class="status-dot offline"></span>
+        </div>
+        <div class="chat-preview">
+          <div class="chat-preview-name">Marco Keller</div>
+          <div class="chat-preview-msg">Danke fuer die Rueckmeldung!</div>
+        </div>
+        <span class="chat-preview-time">Yesterday</span>
+      </div>
+
+      <div class="chat-list-item" data-chat="mock4">
+        <div class="chat-avatar user" style="background:#8764b8">
+          <span>LB</span>
+          <span class="status-dot online"></span>
+        </div>
+        <div class="chat-preview">
+          <div class="chat-preview-name">Laura Brunner</div>
+          <div class="chat-preview-msg">Meeting um 14:00 bestätigt</div>
+        </div>
+        <span class="chat-preview-time">Yesterday</span>
+      </div>
+
+      <div class="chat-list-item" data-chat="mock5">
+        <div class="chat-avatar team" style="background:#038387">
+          <span>HR</span>
+        </div>
+        <div class="chat-preview">
+          <div class="chat-preview-name">HR - Allgemein</div>
+          <div class="chat-preview-msg">Neue Richtlinien verfuegbar</div>
+        </div>
+        <span class="chat-preview-time">Mon</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Chat Area -->
+  <main class="chat-main">
+    <!-- Chat Header -->
+    <div class="chat-header">
+      <div class="chat-header-left">
+        <div class="chat-header-avatar">&#x1F916;</div>
+        <div class="chat-header-info">
+          <h3>Briefing Agent</h3>
+          <span id="connectionStatus">Not connected</span>
+        </div>
+      </div>
+      <div class="chat-header-right">
+        <button class="header-btn" title="Video call">&#x1F4F9;</button>
+        <button class="header-btn" title="Audio call">&#x1F4DE;</button>
+        <button class="header-btn" title="Screen share">&#x1F5B5;</button>
+        <button class="header-btn" title="Add people">&#x1F464;</button>
+      </div>
+    </div>
+
+    <!-- Messages Container -->
+    <div class="messages-container" id="messagesContainer">
+      <div class="welcome-section" id="welcomeSection">
+        <div class="welcome-icon">&#x1F916;</div>
+        <h2>Mobiliar Briefing Agent</h2>
+        <p>Upload a briefing document (PDF, Word, Excel) and I will extract the event details and create it in Salesforce for you.</p>
+        <div class="org-badge" id="orgBadge" style="display:none">
+          <span class="dot"></span>
+          <span id="orgBadgeText">Connected</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Compose Area -->
+    <div class="compose-area">
+      <div class="compose-box">
+        <div class="compose-toolbar">
+          <button class="toolbar-btn" title="Format">&#x1D401;</button>
+          <button class="toolbar-btn" id="attachBtn" title="Attach file">&#x1F4CE;</button>
+          <div class="toolbar-divider"></div>
+          <button class="toolbar-btn" title="Emoji">&#x1F600;</button>
+          <button class="toolbar-btn" title="GIF">GIF</button>
+          <button class="toolbar-btn" title="Sticker">&#x1F3AB;</button>
+          <div class="toolbar-divider"></div>
+          <button class="toolbar-btn" title="Schedule">&#x1F4C5;</button>
+          <button class="toolbar-btn" title="More">&#x22EF;</button>
+        </div>
+
+        <!-- File Upload Preview -->
+        <div class="file-upload-area" id="fileUploadArea">
+          <span style="font-size:24px" id="fileTypeIcon">&#x1F4C4;</span>
+          <div class="file-upload-preview">
+            <span class="file-upload-name" id="fileUploadName"></span>
+          </div>
+          <button class="file-upload-remove" id="fileUploadRemove" title="Remove">&#x2715;</button>
+        </div>
+
+        <div class="compose-input-row">
+          <textarea class="compose-input" id="messageInput" placeholder="Type a message" rows="1"></textarea>
+          <button class="send-btn" id="sendBtn" title="Send">&#x27A4;</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Auth Overlay -->
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card">
+    <div class="auth-logo">&#x2601;</div>
+    <h2>Connect to Salesforce</h2>
+    <p>To use the Briefing Agent, please connect your Salesforce org. This is a one-time setup.</p>
+    <button class="auth-btn auth-btn-sf" onclick="window.location.href='/auth/login'">
+      <span>&#x2601;</span>
+      Sign in with Salesforce
+    </button>
+    <div class="auth-status" id="authStatus"></div>
+  </div>
+</div>
+
+<!-- Hidden file input -->
+<input type="file" id="fileInput" accept=".pdf,.docx,.xlsx,.xls,.csv,.txt" />
+
+<script src="/js/teams-app.js"></script>
+</body>
+</html>
