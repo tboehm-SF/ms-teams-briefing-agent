@@ -300,12 +300,48 @@
 
     <!-- Auth mode tabs -->
     <div class="auth-tabs">
-      <button class="auth-tab active" data-tab="token" onclick="switchTab('token')">Access Token</button>
+      <button class="auth-tab active" data-tab="client_credentials" onclick="switchTab('client_credentials')">Client Credentials</button>
+      <button class="auth-tab" data-tab="token" onclick="switchTab('token')">Access Token</button>
       <button class="auth-tab" data-tab="oauth" onclick="switchTab('oauth')">OAuth Login</button>
     </div>
 
-    <!-- Tab 1: Direct Access Token -->
-    <div class="auth-panel active" id="panel-token">
+    <!-- Tab 1: Client Credentials (External Client App — recommended for Agent API) -->
+    <div class="auth-panel active" id="panel-client_credentials">
+      <form id="ccForm" onsubmit="return handleCCLogin(event)">
+        <div class="form-group">
+          <label class="form-label">Instance URL</label>
+          <input class="form-input" type="url" id="ccInstanceUrl"
+                 placeholder="https://your-org.my.salesforce.com"
+                 required />
+          <div class="form-hint">Your Salesforce org URL</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Consumer Key</label>
+          <input class="form-input" type="password" id="ccClientId"
+                 placeholder="External Client App consumer key"
+                 required />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Consumer Secret</label>
+          <input class="form-input" type="password" id="ccClientSecret"
+                 placeholder="External Client App consumer secret"
+                 required />
+        </div>
+
+        <button class="login-btn login-btn-sf" type="submit" id="ccLoginBtn">
+          <span class="sf-cloud-icon">&#x2601;</span>
+          Sign in with Client Credentials
+        </button>
+      </form>
+      <div class="form-hint" style="margin-top:12px; text-align:center;">
+        Use the Consumer Key &amp; Secret from your External Client App (e.g. "Teams Demo Kit") with Agent API scopes.
+      </div>
+    </div>
+
+    <!-- Tab 2: Direct Access Token -->
+    <div class="auth-panel" id="panel-token">
       <form id="tokenForm" onsubmit="return handleTokenLogin(event)">
         <div class="form-group">
           <label class="form-label">Instance URL</label>
@@ -426,6 +462,42 @@
     } else {
       btn.disabled = false;
       btn.innerHTML = btn.dataset.origText || btn.innerHTML;
+    }
+  }
+
+  // Client Credentials login (External Client App — Agent API)
+  async function handleCCLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('ccLoginBtn');
+    setLoading(btn, true);
+    showStatus('Authenticating with Client Credentials...', 'connecting');
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'client_credentials',
+          clientId: document.getElementById('ccClientId').value.trim(),
+          clientSecret: document.getElementById('ccClientSecret').value.trim(),
+          instanceUrl: document.getElementById('ccInstanceUrl').value.trim()
+        })
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        showStatus(`Connected as ${data.username || 'External Client App'}`, 'success');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 800);
+      } else {
+        showStatus(data.error || 'Authentication failed', 'error');
+        setLoading(btn, false);
+      }
+    } catch (err) {
+      showStatus('Network error — check your connection', 'error');
+      setLoading(btn, false);
     }
   }
 

@@ -87,7 +87,14 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     let result;
 
-    if (mode === 'token') {
+    if (mode === 'client_credentials') {
+      result = await setCredentials({
+        mode: 'client_credentials',
+        clientId: req.body.clientId,
+        clientSecret: req.body.clientSecret,
+        instanceUrl: req.body.instanceUrl
+      });
+    } else if (mode === 'token') {
       result = await setCredentials({
         accessToken: req.body.accessToken,
         instanceUrl: req.body.instanceUrl
