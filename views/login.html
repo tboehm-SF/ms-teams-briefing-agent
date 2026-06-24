@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in — Microsoft Teams</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%235b5fc7'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='white' font-family='Segoe UI,sans-serif' font-weight='700'>T</text></svg>">
+  <style>
+    :root {
+      --teams-bg-primary: #1b1a1f;
+      --teams-bg-secondary: #292828;
+      --teams-bg-tertiary: #3d3c41;
+      --teams-bg-hover: #3d3c41;
+      --teams-border: #3d3c41;
+      --teams-text-primary: #ffffff;
+      --teams-text-secondary: #adadb1;
+      --teams-text-tertiary: #8b8b8f;
+      --teams-purple: #5b5fc7;
+      --teams-purple-hover: #7579eb;
+      --teams-green: #92c353;
+      --teams-red: #c4314b;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+      background: var(--teams-bg-primary);
+      color: var(--teams-text-primary);
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .login-container {
+      width: 100%;
+      max-width: 460px;
+      padding: 20px;
+    }
+
+    .login-card {
+      background: var(--teams-bg-secondary);
+      border: 1px solid var(--teams-border);
+      border-radius: 12px;
+      padding: 40px;
+      text-align: center;
+    }
+
+    .login-logo {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 12px;
+      background: linear-gradient(135deg, #5b5fc7, #7579eb);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+    }
+
+    .login-title {
+      font-size: 22px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .login-subtitle {
+      font-size: 14px;
+      color: var(--teams-text-secondary);
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+
+    /* Tab switcher */
+    .auth-tabs {
+      display: flex;
+      background: var(--teams-bg-primary);
+      border-radius: 8px;
+      padding: 3px;
+      margin-bottom: 24px;
+    }
+
+    .auth-tab {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      background: transparent;
+      color: var(--teams-text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+
+    .auth-tab.active {
+      background: var(--teams-purple);
+      color: white;
+    }
+
+    .auth-tab:hover:not(.active) {
+      color: var(--teams-text-primary);
+    }
+
+    /* Tab panels */
+    .auth-panel {
+      display: none;
+      text-align: left;
+    }
+
+    .auth-panel.active {
+      display: block;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--teams-text-secondary);
+    }
+
+    .form-input {
+      width: 100%;
+      height: 38px;
+      padding: 0 12px;
+      background: var(--teams-bg-primary);
+      border: 1px solid var(--teams-border);
+      border-radius: 6px;
+      color: var(--teams-text-primary);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .form-input:focus {
+      border-color: var(--teams-purple);
+    }
+
+    .form-input::placeholder {
+      color: var(--teams-text-tertiary);
+    }
+
+    .form-hint {
+      font-size: 11px;
+      color: var(--teams-text-tertiary);
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    .form-row .form-group {
+      flex: 1;
+    }
+
+    .login-btn {
+      width: 100%;
+      height: 42px;
+      border: none;
+      border-radius: 6px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.15s;
+      font-family: inherit;
+      margin-top: 8px;
+    }
+
+    .login-btn-sf {
+      background: #00a1e0;
+      color: white;
+    }
+
+    .login-btn-sf:hover:not(:disabled) {
+      background: #0082b4;
+    }
+
+    .login-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .sf-cloud-icon {
+      font-size: 18px;
+    }
+
+    /* Status messages */
+    .login-status {
+      margin-top: 16px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      display: none;
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    .login-status.visible {
+      display: block;
+    }
+
+    .login-status.connecting {
+      background: rgba(91, 95, 199, 0.15);
+      color: var(--teams-purple-hover);
+      border: 1px solid rgba(91, 95, 199, 0.3);
+    }
+
+    .login-status.success {
+      background: rgba(146, 195, 83, 0.15);
+      color: var(--teams-green);
+      border: 1px solid rgba(146, 195, 83, 0.3);
+    }
+
+    .login-status.error {
+      background: rgba(196, 49, 75, 0.15);
+      color: #f27983;
+      border: 1px solid rgba(196, 49, 75, 0.3);
+    }
+
+    /* Spinner */
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Or divider */
+    .or-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 20px 0;
+      color: var(--teams-text-tertiary);
+      font-size: 12px;
+    }
+
+    .or-divider::before,
+    .or-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--teams-border);
+    }
+
+    /* Footer */
+    .login-footer {
+      margin-top: 20px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--teams-text-tertiary);
+      line-height: 1.5;
+    }
+
+    /* env hint badge */
+    .env-hint {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      background: rgba(91, 95, 199, 0.1);
+      border: 1px solid rgba(91, 95, 199, 0.2);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--teams-text-secondary);
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="login-container">
+  <div class="login-card">
+    <div class="login-logo">&#x2601;</div>
+    <h1 class="login-title">Salesforce Sign-In</h1>
+    <p class="login-subtitle">Connect to your Salesforce org to use the Briefing Agent</p>
+
+    <!-- Auth mode tabs -->
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="token" onclick="switchTab('token')">Access Token</button>
+      <button class="auth-tab" data-tab="oauth" onclick="switchTab('oauth')">OAuth Login</button>
+    </div>
+
+    <!-- Tab 1: Direct Access Token -->
+    <div class="auth-panel active" id="panel-token">
+      <form id="tokenForm" onsubmit="return handleTokenLogin(event)">
+        <div class="form-group">
+          <label class="form-label">Instance URL</label>
+          <input class="form-input" type="url" id="instanceUrl"
+                 placeholder="https://your-org.my.salesforce.com"
+                 required />
+          <div class="form-hint">Your Salesforce org URL (e.g. https://mycompany.my.salesforce.com)</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Access Token</label>
+          <input class="form-input" type="password" id="accessToken"
+                 placeholder="00Dxx0000001gPL!AR8AQ..."
+                 required />
+          <div class="form-hint">Session ID or access token from your org</div>
+        </div>
+
+        <button class="login-btn login-btn-sf" type="submit" id="tokenLoginBtn">
+          <span class="sf-cloud-icon">&#x2601;</span>
+          Sign in with Access Token
+        </button>
+      </form>
+    </div>
+
+    <!-- Tab 2: Username-Password OAuth -->
+    <div class="auth-panel" id="panel-oauth">
+      <form id="oauthForm" onsubmit="return handleOAuthLogin(event)">
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input class="form-input" type="text" id="sfUsername"
+                 placeholder="user@company.com"
+                 required />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" type="password" id="sfPassword"
+                 placeholder="Your Salesforce password"
+                 required />
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Consumer Key</label>
+            <input class="form-input" type="password" id="sfClientId"
+                   placeholder="Connected App key"
+                   required />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Consumer Secret</label>
+            <input class="form-input" type="password" id="sfClientSecret"
+                   placeholder="Connected App secret"
+                   required />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Security Token</label>
+            <input class="form-input" type="password" id="sfSecurityToken"
+                   placeholder="Optional" />
+            <div class="form-hint">Append to password if IP not whitelisted</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Login URL</label>
+            <select class="form-input" id="sfLoginUrl" style="cursor:pointer">
+              <option value="https://login.salesforce.com">Production</option>
+              <option value="https://test.salesforce.com">Sandbox</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="login-btn login-btn-sf" type="submit" id="oauthLoginBtn">
+          <span class="sf-cloud-icon">&#x2601;</span>
+          Sign in with Salesforce
+        </button>
+      </form>
+    </div>
+
+    <!-- Status message -->
+    <div class="login-status" id="loginStatus"></div>
+
+    <!-- Footer hint -->
+    <div class="login-footer">
+      <div class="env-hint">
+        &#x1F4A1; Tip: Set environment variables to skip this screen on startup
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Tab switching
+  function switchTab(tab) {
+    document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
+    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    document.getElementById(`panel-${tab}`).classList.add('active');
+    hideStatus();
+  }
+
+  // Status helpers
+  function showStatus(msg, type) {
+    const el = document.getElementById('loginStatus');
+    el.textContent = msg;
+    el.className = `login-status visible ${type}`;
+  }
+
+  function hideStatus() {
+    document.getElementById('loginStatus').className = 'login-status';
+  }
+
+  function setLoading(btn, loading) {
+    if (loading) {
+      btn.disabled = true;
+      btn.dataset.origText = btn.innerHTML;
+      btn.innerHTML = '<span class="spinner"></span> Connecting...';
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = btn.dataset.origText || btn.innerHTML;
+    }
+  }
+
+  // Access Token login
+  async function handleTokenLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('tokenLoginBtn');
+    setLoading(btn, true);
+    showStatus('Connecting to Salesforce...', 'connecting');
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'token',
+          accessToken: document.getElementById('accessToken').value.trim(),
+          instanceUrl: document.getElementById('instanceUrl').value.trim()
+        })
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        showStatus(`Connected as ${data.username || 'Salesforce User'}`, 'success');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 800);
+      } else {
+        showStatus(data.error || 'Authentication failed', 'error');
+        setLoading(btn, false);
+      }
+    } catch (err) {
+      showStatus('Network error — check your connection', 'error');
+      setLoading(btn, false);
+    }
+  }
+
+  // OAuth login
+  async function handleOAuthLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('oauthLoginBtn');
+    setLoading(btn, true);
+    showStatus('Authenticating with Salesforce...', 'connecting');
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'oauth',
+          username: document.getElementById('sfUsername').value.trim(),
+          password: document.getElementById('sfPassword').value,
+          clientId: document.getElementById('sfClientId').value.trim(),
+          clientSecret: document.getElementById('sfClientSecret').value.trim(),
+          securityToken: document.getElementById('sfSecurityToken').value.trim(),
+          loginUrl: document.getElementById('sfLoginUrl').value
+        })
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        showStatus(`Connected as ${data.username || 'Salesforce User'}`, 'success');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 800);
+      } else {
+        showStatus(data.error || 'Authentication failed', 'error');
+        setLoading(btn, false);
+      }
+    } catch (err) {
+      showStatus('Network error — check your connection', 'error');
+      setLoading(btn, false);
+    }
+  }
+
+  // On page load, check if already authenticated (env vars worked)
+  (async function checkAuth() {
+    try {
+      const res = await fetch('/api/auth/status');
+      const data = await res.json();
+      if (data.authenticated) {
+        // Already authenticated via env vars — go straight to the app
+        window.location.href = '/';
+      }
+    } catch (e) {
+      // Server not reachable — stay on login page
+    }
+  })();
+</script>
+
+</body>
+</html>

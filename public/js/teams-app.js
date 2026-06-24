@@ -85,11 +85,8 @@ class TeamsApp {
         // Create agent session
         await this.createAgentSession();
       } else {
-        // Server not yet authenticated — retry after a short delay
-        this.els.connectionStatus.textContent = 'Waiting for connection...';
-        this.els.connectionStatus.style.color = '#f0a30a';
-        this.addSystemMessage('Connecting to Salesforce... Please wait.');
-        setTimeout(() => this.connectToSalesforce(), 3000);
+        // Not authenticated — redirect to login page
+        window.location.href = '/login';
       }
     } catch (err) {
       console.error('Connection check failed:', err);
@@ -214,9 +211,10 @@ class TeamsApp {
       if (data.success && data.response) {
         this.renderAgentResponse(data.response);
       } else if (data.needsReauth) {
-        this.addSystemMessage('Salesforce connection lost. Reconnecting...');
+        this.addSystemMessage('Salesforce session expired. Redirecting to login...');
         this.authenticated = false;
-        setTimeout(() => this.connectToSalesforce(), 2000);
+        setTimeout(() => { window.location.href = '/login'; }, 1500);
+        return;
       } else {
         throw new Error(data.error || 'No response from agent');
       }

@@ -3,7 +3,7 @@ const express = require('express');
 const session = require('express-session');
 const multer = require('multer');
 const path = require('path');
-const { authenticate, getAuth, getAuthHealth } = require('./routes/auth');
+const { authenticate, getAuth, getAuthHealth, setCredentials, hasCredentials, logout } = require('./routes/auth');
 const agentRoutes = require('./routes/agent');
 const { getAgentMetrics } = require('./routes/agent');
 
@@ -56,12 +56,21 @@ app.set('upload', upload);
 // Routes
 app.use('/api/agent', agentRoutes);
 
-// Main page
+// Main page — redirect to login if not authenticated
 app.get('/', (req, res) => {
+  const auth = getAuth();
+  if (!auth.authenticated) {
+    return res.redirect('/login');
+  }
   res.sendFile(path.join(__dirname, 'views', 'index.html'));
 });
 
-// Auth status endpoint — returns global auth state (auto sign-in)
+// Login page
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'views', 'login.html'));
+});
+
+// Auth status endpoint — returns global auth state
 app.get('/api/auth/status', (req, res) => {
   const auth = getAuth();
   res.json({
@@ -69,6 +78,49 @@ app.get('/api/auth/status', (req, res) => {
     instanceUrl: auth.instanceUrl || null,
     username: auth.username || null
   });
+});
+
+// Login endpoint — accepts credentials from the login UI
+app.post('/api/auth/login', async (req, res) => {
+  const { mode } = req.body;
+
+  try {
+    let result;
+
+    if (mode === 'token') {
+      result = await setCredentials({
+        accessToken: req.body.accessToken,
+        instanceUrl: req.body.instanceUrl
+      });
+    } else if (mode === 'oauth') {
+      result = await setCredentials({
+        username: req.body.username,
+        password: req.body.password,
+        clientId: req.body.clientId,
+        clientSecret: req.body.clientSecret,
+        securityToken: req.body.securityToken || '',
+        loginUrl: req.body.loginUrl || 'https://login.salesforce.com'
+      });
+    } else {
+      return res.status(400).json({ success: false, error: 'Invalid auth mode' });
+    }
+
+    if (result.success) {
+      const auth = getAuth();
+      res.json({ success: true, username: auth.username });
+    } else {
+      res.status(401).json({ success: false, error: result.error });
+    }
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  logout();
+  res.json({ success: true });
 });
 
 // Health check endpoint — for monitoring and stress testing
@@ -146,17 +198,28 @@ async function extractText(file) {
   return '[Unsupported file format]';
 }
 
-// Auto-authenticate to Salesforce, then start the server
+// Try auto-authenticate from env vars, then start the server
 async function startServer() {
-  const authSuccess = await authenticate();
-  if (authSuccess) {
-    console.log('Salesforce auto sign-in successful!');
+  if (hasCredentials()) {
+    console.log('Salesforce credentials found — attempting auto sign-in...');
+    const authSuccess = await authenticate();
+    if (authSuccess) {
+      console.log('Salesforce auto sign-in successful!');
+    } else {
+      console.warn('WARNING: Salesforce auto sign-in failed. Login screen will be shown.');
+    }
   } else {
-    console.warn('WARNING: Salesforce auto sign-in failed. Check your SF_USERNAME, SF_PASSWORD, SF_CLIENT_ID, SF_CLIENT_SECRET environment variables.');
+    console.log('No Salesforce credentials configured — login screen will be shown.');
   }
 
   app.listen(PORT, () => {
     console.log(`MS Teams Briefing Agent running on port ${PORT}`);
+    const auth = getAuth();
+    if (auth.authenticated) {
+      console.log(`  Salesforce: connected as ${auth.username}`);
+    } else {
+      console.log(`  Salesforce: awaiting login at http://localhost:${PORT}/login`);
+    }
   });
 }
 

@@ -1,21 +1,23 @@
 const axios = require('axios');
 
-// Salesforce auto-authentication module
-// Supports two modes:
+// Salesforce authentication module
+// Supports three modes:
 //   1. Username-password OAuth flow (SF_USERNAME + SF_PASSWORD + SF_CLIENT_ID + SF_CLIENT_SECRET)
 //   2. Direct access token (SF_ACCESS_TOKEN + SF_INSTANCE_URL) — simpler, no Connected App needed
-// No manual login required — authenticates automatically on server startup
+//   3. Runtime login — user enters credentials via the login UI at startup
+// Environment variables auto-authenticate on boot. If none are set, the login UI is shown.
 
-const SF_LOGIN_URL = process.env.SF_LOGIN_URL || 'https://login.salesforce.com';
-const SF_CLIENT_ID = process.env.SF_CLIENT_ID;
-const SF_CLIENT_SECRET = process.env.SF_CLIENT_SECRET;
-const SF_USERNAME = process.env.SF_USERNAME;
-const SF_PASSWORD = process.env.SF_PASSWORD;
-const SF_SECURITY_TOKEN = process.env.SF_SECURITY_TOKEN || '';
-
-// Direct token mode
-const SF_ACCESS_TOKEN = process.env.SF_ACCESS_TOKEN;
-const SF_INSTANCE_URL = process.env.SF_INSTANCE_URL;
+// Mutable credentials — can be set at runtime via the login UI
+let credentials = {
+  loginUrl: process.env.SF_LOGIN_URL || 'https://login.salesforce.com',
+  clientId: process.env.SF_CLIENT_ID || '',
+  clientSecret: process.env.SF_CLIENT_SECRET || '',
+  username: process.env.SF_USERNAME || '',
+  password: process.env.SF_PASSWORD || '',
+  securityToken: process.env.SF_SECURITY_TOKEN || '',
+  accessToken: process.env.SF_ACCESS_TOKEN || '',
+  instanceUrl: process.env.SF_INSTANCE_URL || ''
+};
 
 // Token refresh interval (90 minutes — Salesforce tokens expire after ~2 hours)
 const TOKEN_REFRESH_INTERVAL_MS = 90 * 60 * 1000;
@@ -65,6 +67,50 @@ function sleep(ms) {
 }
 
 /**
+ * Set credentials at runtime (from the login UI).
+ * Overwrites the in-memory credentials and triggers authentication.
+ * Returns { success, error? }
+ */
+async function setCredentials(newCreds) {
+  if (newCreds.accessToken && newCreds.instanceUrl) {
+    credentials.accessToken = newCreds.accessToken;
+    credentials.instanceUrl = newCreds.instanceUrl;
+  } else if (newCreds.username && newCreds.password && newCreds.clientId && newCreds.clientSecret) {
+    credentials.username = newCreds.username;
+    credentials.password = newCreds.password;
+    credentials.clientId = newCreds.clientId;
+    credentials.clientSecret = newCreds.clientSecret;
+    credentials.securityToken = newCreds.securityToken || '';
+    credentials.loginUrl = newCreds.loginUrl || 'https://login.salesforce.com';
+  } else {
+    return { success: false, error: 'Incomplete credentials. Provide either Access Token + Instance URL, or Username + Password + Client ID + Client Secret.' };
+  }
+
+  // Clear previous auth state
+  sfAuth.accessToken = null;
+  sfAuth.instanceUrl = null;
+  sfAuth.username = null;
+  sfAuth.mode = null;
+  lastAuthError = null;
+
+  const ok = await authenticate();
+  if (ok) {
+    return { success: true };
+  }
+  return { success: false, error: lastAuthError || 'Authentication failed' };
+}
+
+/**
+ * Check if any credentials are configured (env vars or runtime).
+ */
+function hasCredentials() {
+  return !!(
+    (credentials.accessToken && credentials.instanceUrl) ||
+    (credentials.username && credentials.password && credentials.clientId && credentials.clientSecret)
+  );
+}
+
+/**
  * Authenticate to Salesforce with retry logic.
  * Tries direct token first, then falls back to username-password flow.
  */
@@ -72,10 +118,10 @@ async function authenticate(retryCount = 0) {
   authAttemptCount++;
 
   // Mode 1: Direct access token (simplest — user provides token + instance URL)
-  if (SF_ACCESS_TOKEN && SF_INSTANCE_URL) {
+  if (credentials.accessToken && credentials.instanceUrl) {
     log('info', 'Attempting direct access token authentication');
-    sfAuth.accessToken = SF_ACCESS_TOKEN;
-    sfAuth.instanceUrl = SF_INSTANCE_URL.replace(/\/$/, '');
+    sfAuth.accessToken = credentials.accessToken;
+    sfAuth.instanceUrl = credentials.instanceUrl.replace(/\/$/, '');
     sfAuth.mode = 'token';
 
     try {
@@ -94,9 +140,11 @@ async function authenticate(retryCount = 0) {
       startRefreshTimer();
       return true;
     } catch (err) {
+      const errorDetail = err.response?.data || err.message;
+      lastAuthError = typeof errorDetail === 'object' ? JSON.stringify(errorDetail) : errorDetail;
       log('warn', 'Direct token verification failed, falling back to password flow', {
         status: err.response?.status,
-        error: err.response?.data || err.message
+        error: errorDetail
       });
       sfAuth.accessToken = null;
       sfAuth.instanceUrl = null;
@@ -104,22 +152,22 @@ async function authenticate(retryCount = 0) {
   }
 
   // Mode 2: Username-password OAuth flow
-  if (SF_USERNAME && SF_PASSWORD && SF_CLIENT_ID && SF_CLIENT_SECRET) {
+  if (credentials.username && credentials.password && credentials.clientId && credentials.clientSecret) {
     try {
       log('info', 'Authenticating via username-password OAuth flow', {
-        username: SF_USERNAME,
-        loginUrl: SF_LOGIN_URL,
+        username: credentials.username,
+        loginUrl: credentials.loginUrl,
         attempt: retryCount + 1
       });
 
       const response = await axios.post(
-        `${SF_LOGIN_URL}/services/oauth2/token`,
+        `${credentials.loginUrl}/services/oauth2/token`,
         new URLSearchParams({
           grant_type: 'password',
-          client_id: SF_CLIENT_ID,
-          client_secret: SF_CLIENT_SECRET,
-          username: SF_USERNAME,
-          password: SF_PASSWORD + SF_SECURITY_TOKEN
+          client_id: credentials.clientId,
+          client_secret: credentials.clientSecret,
+          username: credentials.username,
+          password: credentials.password + credentials.securityToken
         }).toString(),
         {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -140,9 +188,9 @@ async function authenticate(retryCount = 0) {
           headers: { 'Authorization': `Bearer ${sfAuth.accessToken}` },
           timeout: 10000
         });
-        sfAuth.username = userInfo.data.display_name || userInfo.data.username || SF_USERNAME;
+        sfAuth.username = userInfo.data.display_name || userInfo.data.username || credentials.username;
       } catch (e) {
-        sfAuth.username = SF_USERNAME;
+        sfAuth.username = credentials.username;
       }
 
       log('info', 'Salesforce authenticated (password flow)', {
@@ -173,13 +221,13 @@ async function authenticate(retryCount = 0) {
     }
   }
 
-  log('error', 'No Salesforce credentials configured', {
-    hasAccessToken: !!SF_ACCESS_TOKEN,
-    hasInstanceUrl: !!SF_INSTANCE_URL,
-    hasUsername: !!SF_USERNAME,
-    hasPassword: !!SF_PASSWORD,
-    hasClientId: !!SF_CLIENT_ID,
-    hasClientSecret: !!SF_CLIENT_SECRET
+  log('warn', 'No Salesforce credentials configured — waiting for login', {
+    hasAccessToken: !!credentials.accessToken,
+    hasInstanceUrl: !!credentials.instanceUrl,
+    hasUsername: !!credentials.username,
+    hasPassword: !!credentials.password,
+    hasClientId: !!credentials.clientId,
+    hasClientSecret: !!credentials.clientSecret
   });
   return false;
 }
@@ -249,4 +297,22 @@ function getAuthHealth() {
   };
 }
 
-module.exports = { authenticate, refreshAuth, getAuth, getAuthHealth };
+/**
+ * Disconnect / logout — clear auth state so login screen is shown again.
+ */
+function logout() {
+  sfAuth.accessToken = null;
+  sfAuth.instanceUrl = null;
+  sfAuth.username = null;
+  sfAuth.issuedAt = null;
+  sfAuth.mode = null;
+  lastAuthTime = null;
+  lastAuthError = null;
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+  log('info', 'Logged out — auth state cleared');
+}
+
+module.exports = { authenticate, refreshAuth, getAuth, getAuthHealth, setCredentials, hasCredentials, logout };
