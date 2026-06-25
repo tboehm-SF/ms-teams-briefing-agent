@@ -479,6 +479,11 @@ class TeamsApp {
   }
 
   showTypingIndicator(phase = 'thinking') {
+    // Track when indicator first appeared (for minimum display time)
+    if (!this._thinkingStartTime) {
+      this._thinkingStartTime = Date.now();
+    }
+
     // Phase messages with icons for the multi-step process
     const phases = {
       thinking:   { icon: '🧠', text: 'Briefing Agent denkt nach...',           color: '#5b5fc7' },
@@ -522,12 +527,16 @@ class TeamsApp {
   }
 
   /**
-   * Cycle through thinking phases automatically for file uploads
+   * Cycle through thinking phases automatically for file uploads.
+   * Guarantees a minimum display time so the user always sees the phases.
    */
   startThinkingSequence() {
     this.thinkingPhaseIndex = 0;
+    this._thinkingStartTime = Date.now();
+    this._pendingRemove = false;
+
     const fileSequence = ['analyzing', 'extracting', 'creating', 'translating', 'finishing'];
-    const delays =       [2500,        3000,         3500,       3000,          2000];
+    const delays =       [3000,        3000,         3500,       3000,          2500];
 
     this.showTypingIndicator(fileSequence[0]);
 
@@ -536,19 +545,42 @@ class TeamsApp {
       if (this.thinkingPhaseIndex < fileSequence.length && document.getElementById('typingIndicator')) {
         this.showTypingIndicator(fileSequence[this.thinkingPhaseIndex]);
         this._thinkingTimer = setTimeout(advancePhase, delays[this.thinkingPhaseIndex]);
+      } else if (this._pendingRemove) {
+        // All phases done and removal was requested — now remove
+        this._doRemoveIndicator();
       }
     };
 
     this._thinkingTimer = setTimeout(advancePhase, delays[0]);
   }
 
-  removeTypingIndicator() {
+  /**
+   * Internal: actually remove the indicator element
+   */
+  _doRemoveIndicator() {
     if (this._thinkingTimer) {
       clearTimeout(this._thinkingTimer);
       this._thinkingTimer = null;
     }
+    this._pendingRemove = false;
+    this._thinkingStartTime = null;
     const el = document.getElementById('typingIndicator');
     if (el) el.remove();
+  }
+
+  removeTypingIndicator() {
+    const MIN_DISPLAY_MS = 3000; // minimum 3 seconds visible
+    const elapsed = Date.now() - (this._thinkingStartTime || 0);
+
+    if (this._thinkingStartTime && elapsed < MIN_DISPLAY_MS) {
+      // Too soon — wait until minimum time has passed, then remove
+      this._pendingRemove = true;
+      setTimeout(() => {
+        this._doRemoveIndicator();
+      }, MIN_DISPLAY_MS - elapsed);
+    } else {
+      this._doRemoveIndicator();
+    }
   }
 
   // ===== FILE HANDLING =====
