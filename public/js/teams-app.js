@@ -139,8 +139,8 @@ class TeamsApp {
       // Show file attachment in chat
       this.addFileMessage(fileName, fileSize);
 
-      // Upload and extract text
-      this.showTypingIndicator();
+      // Upload and extract text — start thinking sequence
+      this.startThinkingSequence();
       try {
         const formData = new FormData();
         formData.append('file', this.uploadedFile);
@@ -184,7 +184,7 @@ class TeamsApp {
       this.els.messageInput.value = '';
       this.els.messageInput.style.height = 'auto';
       this.updateSendBtn();
-      this.showTypingIndicator();
+      this.showTypingIndicator('thinking');
       await this.sendToAgent(text);
     }
   }
@@ -254,7 +254,6 @@ class TeamsApp {
         details[match[1].trim()] = match[2].trim();
         inSummary = false;
       } else if (trimmed.includes('lightning.force.com') || trimmed.includes('Event_Instance__c')) {
-        // Extract URL
         const urlMatch = trimmed.match(/(https?:\/\/[^\s]+)/);
         if (urlMatch) salesforceLink = urlMatch[1];
         inSummary = false;
@@ -272,39 +271,117 @@ class TeamsApp {
       if (urlMatch) salesforceLink = urlMatch[1];
     }
 
-    // Build event card HTML
-    let cardHtml = '<div class="event-card">';
-    cardHtml += '<div class="event-card-title">✅ Event erfolgreich erstellt!</div>';
+    // Build enhanced event card HTML
+    let cardHtml = '<div class="event-card-enhanced">';
 
-    const fieldOrder = [
-      ['Event-Nummer', '🔢'],
-      ['Event-Name', '📋'],
-      ['Datum', '📅'],
-      ['Ort', '📍'],
-      ['Kapazitaet', '👥'],
-      ['Kapazität', '👥'],
-      ['Budget', '💰'],
-      ['Compliance-Limite', '⚖️'],
-      ['Event-Typ', '🏷️'],
-      ['Status', '🔄'],
-      ['Dress Code', '👔'],
-      ['Catering', '🍽️']
+    // ── Success header with checkmark animation ──
+    cardHtml += `
+      <div class="event-card-header">
+        <div class="event-card-header-icon">
+          <span class="checkmark-animated">✓</span>
+        </div>
+        <div class="event-card-header-text">
+          <div class="event-card-header-title">Event erfolgreich erstellt!</div>
+          <div class="event-card-header-subtitle">${details['Event-Name'] || 'Neues Event'}</div>
+        </div>
+        ${details['Event-Nummer'] ? `<div class="event-card-badge">${details['Event-Nummer']}</div>` : ''}
+      </div>`;
+
+    // ── Key details section (top-level overview) ──
+    const keyFields = [
+      { key: 'Datum', icon: '📅', label: 'Datum' },
+      { key: 'Ort', icon: '📍', label: 'Ort' },
+      { key: 'Event-Typ', icon: '🏷️', label: 'Event-Typ' },
+      { key: 'Status', icon: '🔄', label: 'Status' }
     ];
 
-    for (const [field, icon] of fieldOrder) {
-      if (details[field]) {
-        cardHtml += `<div class="event-card-row">
-          <span class="event-card-label">${icon} ${field}:</span>
-          <span class="event-card-value">${details[field]}</span>
-        </div>`;
+    const availableKeyFields = keyFields.filter(f => details[f.key]);
+    if (availableKeyFields.length > 0) {
+      cardHtml += '<div class="event-card-overview">';
+      for (const f of availableKeyFields) {
+        let value = details[f.key];
+        // Format date nicely
+        if (f.key === 'Datum') {
+          value = this.formatEventDate(value);
+        }
+        // Color-code status
+        const statusClass = f.key === 'Status' ? ' status-badge status-' + value.toLowerCase() : '';
+        cardHtml += `
+          <div class="event-overview-item">
+            <span class="overview-icon">${f.icon}</span>
+            <div class="overview-content">
+              <span class="overview-label">${f.label}</span>
+              <span class="overview-value${statusClass}">${value}</span>
+            </div>
+          </div>`;
       }
+      cardHtml += '</div>';
     }
 
-    if (salesforceLink) {
-      cardHtml += `<a href="${salesforceLink}" target="_blank" class="event-card-link">
-        &#x2601; Open in Salesforce
-      </a>`;
+    // ── Details grid section ──
+    const detailFields = [
+      { keys: ['Kapazitaet', 'Kapazität'], icon: '👥', label: 'Kapazität' },
+      { keys: ['Budget'], icon: '💰', label: 'Budget' },
+      { keys: ['Compliance-Limite'], icon: '⚖️', label: 'Compliance-Limite' },
+      { keys: ['Dress Code'], icon: '👔', label: 'Dress Code' },
+      { keys: ['Catering'], icon: '🍽️', label: 'Catering' }
+    ];
+
+    const availableDetails = detailFields.filter(f => f.keys.some(k => details[k]));
+    if (availableDetails.length > 0) {
+      cardHtml += `<div class="event-card-section">
+        <div class="event-card-section-title">Details</div>
+        <div class="event-card-details-grid">`;
+      for (const f of availableDetails) {
+        const value = f.keys.map(k => details[k]).find(v => v);
+        cardHtml += `
+          <div class="event-detail-item">
+            <span class="detail-icon">${f.icon}</span>
+            <span class="detail-label">${f.label}</span>
+            <span class="detail-value">${value}</span>
+          </div>`;
+      }
+      cardHtml += '</div></div>';
     }
+
+    // ── Translation status section ──
+    const hasTranslation = details['Übersetzungen'];
+    if (hasTranslation) {
+      const isTranslated = hasTranslation.includes('✅');
+      cardHtml += `
+        <div class="event-card-section">
+          <div class="event-card-section-title">Übersetzungen</div>
+          <div class="translation-status ${isTranslated ? 'translated' : 'pending'}">
+            <div class="translation-icon">${isTranslated ? '🌐' : '⏳'}</div>
+            <div class="translation-info">
+              <span class="translation-label">${isTranslated ? 'Automatisch übersetzt' : 'Übersetzung ausstehend'}</span>
+              <div class="translation-langs">
+                <span class="lang-chip">🇩🇪 DE</span>
+                <span class="lang-arrow">→</span>
+                <span class="lang-chip ${isTranslated ? 'done' : ''}">🇫🇷 FR</span>
+                <span class="lang-chip ${isTranslated ? 'done' : ''}">🇮🇹 IT</span>
+                <span class="lang-chip ${isTranslated ? 'done' : ''}">🇬🇧 EN</span>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // ── Salesforce link button ──
+    if (salesforceLink) {
+      cardHtml += `
+        <div class="event-card-actions">
+          <a href="${salesforceLink}" target="_blank" class="event-card-link-enhanced">
+            <span class="sf-icon">☁</span> In Salesforce öffnen
+          </a>
+        </div>`;
+    }
+
+    // ── Timestamp footer ──
+    cardHtml += `
+      <div class="event-card-footer">
+        <span class="event-card-timestamp">Erstellt: ${new Date().toLocaleString('de-CH', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+      </div>`;
 
     cardHtml += '</div>';
 
@@ -315,6 +392,25 @@ class TeamsApp {
     }
 
     this.addBotMessage(summaryText, cardHtml);
+  }
+
+  /**
+   * Format ISO date string to a nice German format
+   */
+  formatEventDate(dateStr) {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      const options = { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' };
+      let formatted = d.toLocaleDateString('de-CH', options);
+      // Add time if not midnight
+      if (d.getHours() !== 0 || d.getMinutes() !== 0) {
+        formatted += ', ' + d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' }) + ' Uhr';
+      }
+      return formatted;
+    } catch (e) {
+      return dateStr;
+    }
   }
 
   // ===== MESSAGE RENDERING =====
@@ -382,24 +478,75 @@ class TeamsApp {
     this.scrollToBottom();
   }
 
-  showTypingIndicator() {
+  showTypingIndicator(phase = 'thinking') {
+    // Phase messages with icons for the multi-step process
+    const phases = {
+      thinking:   { icon: '🧠', text: 'Briefing Agent denkt nach...',           color: '#5b5fc7' },
+      analyzing:  { icon: '🔍', text: 'Briefing-Dokument wird analysiert...',    color: '#5b5fc7' },
+      extracting: { icon: '📋', text: 'Event-Details werden extrahiert...',      color: '#5b5fc7' },
+      creating:   { icon: '☁️', text: 'Event wird in Salesforce erstellt...',    color: '#92c353' },
+      translating:{ icon: '🌐', text: 'Beschreibungen werden übersetzt...',      color: '#7579eb' },
+      finishing:   { icon: '✨', text: 'Wird abgeschlossen...',                  color: '#92c353' }
+    };
+    const p = phases[phase] || phases.thinking;
+
     const html = `
       <div class="message-group" id="typingIndicator">
         <div class="msg-avatar bot">&#x1F916;</div>
         <div class="msg-content">
-          <div class="typing-indicator">
-            <div class="typing-dots">
-              <span></span><span></span><span></span>
+          <div class="thinking-indicator">
+            <div class="thinking-icon-wrap">
+              <span class="thinking-icon">${p.icon}</span>
+              <div class="thinking-pulse" style="background:${p.color}"></div>
             </div>
-            <span>Briefing Agent is typing...</span>
+            <div class="thinking-text-wrap">
+              <span class="thinking-text">${p.text}</span>
+              <div class="thinking-progress">
+                <div class="thinking-progress-bar" style="background:${p.color}"></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>`;
+
+    // Remove existing indicator before adding new one
+    const existing = document.getElementById('typingIndicator');
+    if (existing) existing.remove();
+
     this.els.messagesContainer.insertAdjacentHTML('beforeend', html);
     this.scrollToBottom();
   }
 
+  updateTypingPhase(phase) {
+    this.showTypingIndicator(phase);
+  }
+
+  /**
+   * Cycle through thinking phases automatically for file uploads
+   */
+  startThinkingSequence() {
+    this.thinkingPhaseIndex = 0;
+    const fileSequence = ['analyzing', 'extracting', 'creating', 'translating', 'finishing'];
+    const delays =       [2500,        3000,         3500,       3000,          2000];
+
+    this.showTypingIndicator(fileSequence[0]);
+
+    const advancePhase = () => {
+      this.thinkingPhaseIndex++;
+      if (this.thinkingPhaseIndex < fileSequence.length && document.getElementById('typingIndicator')) {
+        this.showTypingIndicator(fileSequence[this.thinkingPhaseIndex]);
+        this._thinkingTimer = setTimeout(advancePhase, delays[this.thinkingPhaseIndex]);
+      }
+    };
+
+    this._thinkingTimer = setTimeout(advancePhase, delays[0]);
+  }
+
   removeTypingIndicator() {
+    if (this._thinkingTimer) {
+      clearTimeout(this._thinkingTimer);
+      this._thinkingTimer = null;
+    }
     const el = document.getElementById('typingIndicator');
     if (el) el.remove();
   }
