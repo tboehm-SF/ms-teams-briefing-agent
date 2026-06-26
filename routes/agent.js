@@ -251,23 +251,25 @@ function extractBriefingData(text) {
   const data = {};
 
   // Build a lookup map from the text: key → value
-  // This handles CSV (key,value per row), label: value, and label = value formats
+  // First-in wins — Event Instance Fields appear first and take priority over summary sheets
   const kvMap = new Map();
   const lines = text.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed || trimmed.startsWith('---')) continue;
 
     // Try CSV format: "Key,Value" or "Key;Value"
     const csvMatch = trimmed.match(/^"?([^",;]+)"?\s*[,;]\s*"?(.+?)"?\s*$/);
     if (csvMatch) {
-      kvMap.set(csvMatch[1].trim().toLowerCase(), csvMatch[2].trim());
+      const key = csvMatch[1].trim().toLowerCase();
+      if (!kvMap.has(key)) kvMap.set(key, csvMatch[2].trim());
     }
 
     // Try label: value or label = value
     const labelMatch = trimmed.match(/^([^:=]+?)\s*[:=]\s*(.+)$/);
     if (labelMatch) {
-      kvMap.set(labelMatch[1].trim().toLowerCase(), labelMatch[2].trim());
+      const key = labelMatch[1].trim().toLowerCase();
+      if (!kvMap.has(key)) kvMap.set(key, labelMatch[2].trim());
     }
   }
 
