@@ -150,24 +150,32 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// File upload endpoint
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
+// File upload endpoint — wraps multer to catch its errors as JSON
+app.post('/api/upload', (req, res) => {
+  upload.single('file')(req, res, async (multerErr) => {
+    try {
+      if (multerErr) {
+        console.error('Multer error:', multerErr);
+        return res.status(400).json({ error: multerErr.message || 'File upload failed' });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
 
-    const text = await extractText(req.file);
-    res.json({
-      success: true,
-      filename: req.file.originalname,
-      text: text,
-      size: req.file.size
-    });
-  } catch (err) {
-    console.error('Upload error:', err);
-    res.status(500).json({ error: err.message || 'Failed to process file' });
-  }
+      console.log(`Processing upload: ${req.file.originalname} (${req.file.size} bytes, ${req.file.mimetype})`);
+      const text = await extractText(req.file);
+      console.log(`Extraction complete: ${text.length} chars`);
+      res.json({
+        success: true,
+        filename: req.file.originalname,
+        text: text,
+        size: req.file.size
+      });
+    } catch (err) {
+      console.error('Upload processing error:', err);
+      res.status(500).json({ error: err.message || 'Failed to process file' });
+    }
+  });
 });
 
 // Text extraction from uploaded files
@@ -256,6 +264,12 @@ async function extractText(file) {
 
   return '[Unsupported file format]';
 }
+
+// Global error handler — catch any unhandled Express errors as JSON
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: err.message || 'Internal server error' });
+});
 
 // Try auto-authenticate from env vars, then start the server
 async function startServer() {
