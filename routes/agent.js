@@ -782,17 +782,12 @@ router.post('/message', requireAuth, async (req, res) => {
         const sourceData = sourceResp.data;
         log('info', 'Source record read', { sessionId, fieldCount: Object.keys(sourceData).length });
 
-        // Step 2: Remove system/readonly fields that can't be set on insert
-        const SKIP_FIELDS = new Set([
-          'attributes', 'Id', 'IsDeleted', 'Name', 'CurrencyIsoCode',
-          'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById',
-          'SystemModstamp', 'LastActivityDate', 'LastViewedDate', 'LastReferencedDate',
-          'Checked_In_Count__c', 'Registered_Count__c', 'Translation_Quality_Score__c'
-        ]);
-
+        // Step 2: Only copy custom fields (ending in __c) — skip ALL system/standard fields
+        // This is the safest approach: system fields like MayEdit, IsLocked, Name, etc.
+        // are all standard fields that would cause INVALID_FIELD_FOR_INSERT_UPDATE errors.
         const clonePayload = {};
         for (const [key, val] of Object.entries(sourceData)) {
-          if (!SKIP_FIELDS.has(key) && val !== null && val !== undefined) {
+          if (key.endsWith('__c') && val !== null && val !== undefined) {
             clonePayload[key] = val;
           }
         }
