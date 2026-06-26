@@ -825,6 +825,9 @@ router.post('/message', requireAuth, async (req, res) => {
           fieldsCopied: Object.keys(clonePayload).length
         });
 
+        // Brief pause so the UI shows the "processing" state for a natural feel
+        await new Promise(resolve => setTimeout(resolve, 3500));
+
         res.json({
           success: true,
           response: {
