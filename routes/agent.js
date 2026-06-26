@@ -787,9 +787,28 @@ router.post('/message', requireAuth, async (req, res) => {
           }]
         };
 
-        log('info', 'Calling Apex action', { sessionId, eventName: extractedData.eventNameDE });
+        // Log the FULL payload for debugging
+        const filledFields = Object.entries(actionPayload.inputs[0]).filter(([k,v]) => v !== null && v !== undefined);
+        const nullFields = Object.entries(actionPayload.inputs[0]).filter(([k,v]) => v === null || v === undefined);
+        log('info', 'Calling Apex action', {
+          sessionId,
+          eventName: extractedData.eventNameDE,
+          filledFieldCount: filledFields.length,
+          nullFieldCount: nullFields.length,
+          filledFields: filledFields.map(([k,v]) => k + '=' + String(v).substring(0, 40)),
+          nullFields: nullFields.map(([k]) => k)
+        });
 
-        const response = await sfApiCall('post', APEX_ACTION_PATH, actionPayload);
+        // Strip null values — Salesforce Invocable Action API may reject or ignore inputs with null
+        const cleanInput = {};
+        for (const [key, val] of Object.entries(actionPayload.inputs[0])) {
+          if (val !== null && val !== undefined) {
+            cleanInput[key] = val;
+          }
+        }
+        const cleanPayload = { inputs: [cleanInput] };
+
+        const response = await sfApiCall('post', APEX_ACTION_PATH, cleanPayload);
         const result = response.data[0];
 
         if (result.isSuccess && result.outputValues.success) {
