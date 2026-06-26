@@ -194,10 +194,62 @@ async function extractText(file) {
     const XLSX = require('xlsx');
     const workbook = XLSX.read(file.buffer, { type: 'buffer' });
     let text = '';
+
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
       text += `--- ${sheetName} ---\n`;
-      text += XLSX.utils.sheet_to_csv(sheet) + '\n\n';
+
+      // Smart extraction: read the sheet as an array of arrays
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+      // For event template sheets with dual-column layout (A/B = Series, F/G = Event)
+      // Extract key-value pairs from BOTH column pairs
+      let hasMultiColumn = false;
+      for (const row of rows) {
+        if (row.length >= 7 && row[5] && row[6]) {
+          hasMultiColumn = true;
+          break;
+        }
+      }
+
+      if (hasMultiColumn) {
+        // Extract from columns F/G (Event instance data — primary)
+        text += '--- Event Instance Fields ---\n';
+        for (const row of rows) {
+          const label = row[5] ? String(row[5]).trim() : '';
+          const value = row[6] ? String(row[6]).trim() : '';
+          if (label && value && !label.startsWith('Hilfe') && label !== 'Event') {
+            text += `${label}: ${value}\n`;
+          }
+        }
+        text += '\n';
+
+        // Also extract from columns A/B (Series data — secondary/fallback)
+        text += '--- Event Series Fields ---\n';
+        for (const row of rows) {
+          const label = row[0] ? String(row[0]).trim() : '';
+          const value = row[1] ? String(row[1]).trim() : '';
+          if (label && value && !label.startsWith('Hilfe') && !label.startsWith('Erfassung') &&
+              !label.startsWith('Jeder Event') && !label.startsWith('An einer') &&
+              !label.startsWith('Die blau') && !label.startsWith('Immer zuerst') &&
+              label !== 'Event Serie') {
+            text += `${label}: ${value}\n`;
+          }
+        }
+        text += '\n';
+      } else {
+        // Standard two-column sheet (A=label, B=value) — like "Event Details Übersicht"
+        for (const row of rows) {
+          const label = row[0] ? String(row[0]).trim() : '';
+          const value = row[1] ? String(row[1]).trim() : '';
+          if (label && value) {
+            text += `${label}: ${value}\n`;
+          } else if (label) {
+            text += `${label}\n`;
+          }
+        }
+        text += '\n';
+      }
     }
     return text;
   }

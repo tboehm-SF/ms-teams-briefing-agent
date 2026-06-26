@@ -15,6 +15,29 @@ const VALID_SEGMENTS = ['Family', 'Young people', 'Corporate Business'];
 const VALID_CATEGORIES = ['Sports', 'EntertainmentCulture', 'SpecialOffer'];
 const VALID_TABLE_SHAPES = ['Round', 'Rectangular'];
 
+// German-to-English picklist value mappings (from Wertelisten sheet)
+const PICKLIST_TRANSLATIONS = {
+  // Regions
+  'deutschsprachige schweiz': 'German-speaking Switzerland',
+  'französischsprachige schweiz': 'French-speaking Switzerland',
+  'italienischsprachige schweiz': 'Italian-speaking Switzerland',
+  // Segments
+  'familie': 'Family',
+  'junge menschen': 'Young people',
+  'kmu/unternehmensgeschäft': 'Corporate Business',
+  'unternehmensgeschäft': 'Corporate Business',
+  'kmu': 'Corporate Business',
+  // Categories
+  'sport': 'Sports',
+  'unterhaltung & kultur': 'EntertainmentCulture',
+  'unterhaltung': 'EntertainmentCulture',
+  'kultur': 'EntertainmentCulture',
+  'spezialangebote': 'SpecialOffer',
+  // Event types
+  'hospitality event': 'Kundenanlass',
+  'corporate event': 'Mitarbeiteranlass',
+};
+
 // Concurrency control
 const MAX_CONCURRENT_REQUESTS = 10;
 let activeRequests = 0;
@@ -194,17 +217,29 @@ function normalizeTime(str) {
 }
 
 /**
- * Try to match a value to a picklist. Returns the matched value or null.
+ * Try to match a value to a picklist. Handles German translations too.
  */
 function matchPicklist(val, validValues) {
   if (!val) return null;
   const lower = val.trim().toLowerCase();
+
+  // Check German translation map first
+  if (PICKLIST_TRANSLATIONS[lower]) {
+    const translated = PICKLIST_TRANSLATIONS[lower];
+    if (validValues.includes(translated)) return translated;
+  }
+
   // Exact match
   const exact = validValues.find(v => v.toLowerCase() === lower);
   if (exact) return exact;
+
   // Contains match
   const contains = validValues.find(v => lower.includes(v.toLowerCase()));
-  return contains || null;
+  if (contains) return contains;
+
+  // Reverse contains (picklist value found inside the text)
+  const reverseContains = validValues.find(v => v.toLowerCase().includes(lower));
+  return reverseContains || null;
 }
 
 /**
@@ -240,11 +275,15 @@ function extractBriefingData(text) {
   function findValue(...keys) {
     for (const key of keys) {
       const lower = key.toLowerCase();
-      // Exact match
+      // Exact match first
       if (kvMap.has(lower)) return kvMap.get(lower);
-      // Partial match — find any key that contains the search term
+    }
+    // Then try partial matches (key contains search term or vice versa)
+    for (const key of keys) {
+      const lower = key.toLowerCase();
       for (const [k, v] of kvMap) {
-        if (k.includes(lower) || lower.includes(k)) return v;
+        // Only match if the search key is at least 4 chars (avoid false positives like "typ")
+        if (lower.length >= 4 && (k.includes(lower) || lower.includes(k))) return v;
       }
     }
     return null;
@@ -263,29 +302,29 @@ function extractBriefingData(text) {
   // CORE FIELDS
   // ══════════════════════════════════════════
 
-  // Event name
-  data.eventNameDE = findValue('event-name', 'event name', 'eventname', 'veranstaltung', 'anlass', 'titel', 'name', 'event name (de)', 'event-name (de)')
+  // Event name — Excel uses "Event Name (Deutsch)" or "Event-Name (DE)"
+  data.eventNameDE = findValue('event name (deutsch)', 'event-name (de)', 'event name (de)', 'event-name', 'event name', 'eventname', 'veranstaltung', 'anlass', 'titel')
     || regexFind([
-      /(?:Event(?:-?Name)?|Veranstaltung|Anlass|Titel)\s*[:=]\s*["']?(.+?)["']?\s*$/im,
+      /(?:Event(?:\s*|-?)Name(?:\s*\((?:Deutsch|DE)\))?)\s*[:=]\s*["']?(.+?)["']?\s*$/im,
       /^(?:Name|Titel|Event)\s*[:]\s*(.+)$/im
     ]);
 
-  // Event name FR
-  data.eventNameFR = findValue('event name (fr)', 'event-name (fr)', 'eventname fr', 'name fr', 'nom', 'titre fr');
+  // Event name FR — Excel uses "Event Name (Französisch)"
+  data.eventNameFR = findValue('event name (französisch)', 'event name (franz)', 'event name (fr)', 'event-name (fr)', 'eventname fr', 'name fr', 'nom');
 
-  // Date
-  const rawDate = findValue('datum', 'date', 'termin', 'event-datum', 'event datum', 'event date', 'eventdatum', 'wann')
+  // Date — Excel uses "Startdatum" with "23.11.2026"
+  const rawDate = findValue('startdatum', 'datum', 'date', 'termin', 'event-datum', 'event datum', 'event date', 'eventdatum', 'wann')
     || regexFind([
-      /(?:Datum|Date|Termin|Wann)\s*[:=]\s*(\S+(?:\s+\d{1,2}:\d{2})?)/i
+      /(?:Startdatum|Datum|Date|Termin|Wann)\s*[:=]\s*(\S+(?:\s+\d{1,2}:\d{2})?)/i
     ]);
   data.eventDateStr = normalizeDate(rawDate);
 
-  // Start time
-  const rawStartTime = findValue('startzeit', 'start time', 'beginn', 'anfang', 'von', 'start', 'uhrzeit', 'zeit');
+  // Start time — Excel uses "Startzeit" with "16:00:00"
+  const rawStartTime = findValue('startzeit', 'start time', 'beginn', 'anfang', 'uhrzeit', 'zeit');
   data.startTime = normalizeTime(rawStartTime);
 
-  // End time
-  const rawEndTime = findValue('endzeit', 'end time', 'ende', 'bis', 'schluss');
+  // End time — Excel uses "Endzeit" with "21:00:00"
+  const rawEndTime = findValue('endzeit', 'end time', 'ende');
   data.endTime = normalizeTime(rawEndTime);
 
   // If we found start time but no separate date+time, embed time into date
@@ -293,19 +332,19 @@ function extractBriefingData(text) {
     data.eventDateStr = data.eventDateStr.replace('T00:00:00', `T${data.startTime}:00`);
   }
 
-  // Location
-  data.location = findValue('ort', 'location', 'veranstaltungsort', 'venue', 'standort', 'adresse', 'wo', 'plz/ort')
-    || regexFind([/(?:Ort|Location|Veranstaltungsort|Venue|Wo|Standort|Adresse)\s*[:=]\s*(.+?)$/im]);
+  // Location — Excel uses "Event Ort"
+  data.location = findValue('event ort', 'ort', 'location', 'veranstaltungsort', 'venue', 'standort', 'adresse')
+    || regexFind([/(?:Event\s*Ort|Ort|Location|Veranstaltungsort|Venue|Standort|Adresse)\s*[:=]\s*(.+?)$/im]);
 
-  // Capacity
-  const rawCap = findValue('kapazität', 'kapazitaet', 'capacity', 'teilnehmer', 'personen', 'gäste', 'gaeste', 'anzahl', 'max. teilnehmer', 'max teilnehmer', 'plätze', 'plaetze')
+  // Capacity — Excel may have "150 Gäste" in the summary sheet
+  const rawCap = findValue('kapazität', 'kapazitaet', 'capacity', 'teilnehmer', 'gäste', 'gaeste', 'anzahl', 'max. teilnehmer', 'plätze', 'plaetze')
     || regexFind([
       /(?:Kapazit[aä]t|Capacity|Teilnehmer|Anzahl)\s*[:=]\s*(\d+)/i,
-      /(\d+)\s*(?:Personen|Teilnehmer|G[aä]ste)/i
+      /(\d+)\s*(?:Personen|Teilnehmer|G[aä]ste|Gäste)/i
     ]);
   if (rawCap) {
-    const n = parseInt(rawCap);
-    if (!isNaN(n)) data.capacity = n;
+    const n = parseInt(String(rawCap).replace(/[^\d]/g, ''));
+    if (!isNaN(n) && n > 0) data.capacity = n;
   }
 
   // Budget
@@ -349,9 +388,9 @@ function extractBriefingData(text) {
   data.cateringNotesFR = findValue('catering fr', 'catering (fr)', 'notes catering (fr)', 'notes catering fr');
   data.cateringNotesIT = findValue('catering it', 'catering (it)', 'note catering (it)', 'note catering it');
 
-  // Description
-  data.descriptionDE = findValue('beschreibung', 'beschreibung (de)', 'description', 'zusammenfassung', 'beschreibung de')
-    || regexFind([/(?:Beschreibung|Description|Zusammenfassung)\s*[:=]\s*(.+?)$/im]);
+  // Description — Excel uses "Beschreibung DE" and "Beschreibung FR"
+  data.descriptionDE = findValue('beschreibung de', 'beschreibung (de)', 'beschreibung', 'description', 'zusammenfassung')
+    || regexFind([/(?:Beschreibung(?:\s*(?:DE|\(DE\)))?)\s*[:=]\s*(.+?)$/im]);
   data.descriptionFR = findValue('beschreibung fr', 'beschreibung (fr)', 'description fr', 'description (fr)');
   data.descriptionIT = findValue('beschreibung it', 'beschreibung (it)', 'descrizione', 'descrizione (it)');
   data.descriptionEN = findValue('beschreibung en', 'beschreibung (en)', 'description en', 'description (en)');
@@ -402,18 +441,19 @@ function extractBriefingData(text) {
   // ORDERER / AUFTRAGGEBER
   // ══════════════════════════════════════════
 
-  data.ordererFirstName = findValue('auftraggeber vorname', 'orderer first name', 'vorname auftraggeber', 'besteller vorname');
-  data.ordererLastName = findValue('auftraggeber nachname', 'orderer last name', 'nachname auftraggeber', 'besteller nachname');
-  data.ordererCompany = findValue('auftraggeber firma', 'orderer company', 'firma auftraggeber', 'besteller firma', 'firma');
-  data.ordererEmail = findValue('auftraggeber e-mail', 'auftraggeber email', 'orderer email', 'e-mail auftraggeber', 'besteller email');
-  data.ordererPhone = findValue('auftraggeber telefon', 'orderer phone', 'telefon auftraggeber', 'besteller telefon');
-  data.ordererFunction = findValue('auftraggeber funktion', 'auftraggeber funktion (de)', 'orderer function', 'funktion auftraggeber');
-  data.ordererFunctionFR = findValue('auftraggeber funktion (fr)', 'orderer function fr', 'funktion auftraggeber fr');
+  // Orderer — Excel uses exact labels like "Auftraggeber Vorname", "Auftraggeber Firma"
+  data.ordererFirstName = findValue('auftraggeber vorname', 'orderer first name', 'vorname auftraggeber');
+  data.ordererLastName = findValue('auftraggeber nachname', 'orderer last name', 'nachname auftraggeber');
+  data.ordererCompany = findValue('auftraggeber firma', 'orderer company', 'firma auftraggeber', 'firma');
+  data.ordererEmail = findValue('auftraggeber e-mail', 'auftraggeber email', 'orderer email', 'e-mail auftraggeber');
+  data.ordererPhone = findValue('auftraggeber telefon', 'orderer phone', 'telefon auftraggeber');
+  data.ordererFunction = findValue('auftraggeber funktion de', 'auftraggeber funktion', 'orderer function', 'funktion auftraggeber');
+  data.ordererFunctionFR = findValue('auftraggeber funktion fr', 'auftraggeber funktion (fr)', 'orderer function fr');
 
-  // Also try combined "Auftraggeber" field and split first/last name
+  // Also try combined "Name" in overview sheet — "Thomas Berger"
   if (!data.ordererFirstName && !data.ordererLastName) {
     const combined = findValue('auftraggeber', 'besteller', 'orderer', 'kontaktperson');
-    if (combined) {
+    if (combined && !combined.includes('firma') && !combined.includes('@')) {
       const parts = combined.trim().split(/\s+/);
       if (parts.length >= 2) {
         data.ordererFirstName = parts[0];
@@ -428,13 +468,13 @@ function extractBriefingData(text) {
   // FEATURES / SUPPORTING PROGRAMME
   // ══════════════════════════════════════════
 
-  data.featuresDE = findValue('besonderheiten', 'besonderheiten (de)', 'features', 'features de');
+  data.featuresDE = findValue('besonderheiten de', 'besonderheiten (de)', 'besonderheiten', 'features de', 'features');
   data.featuresFR = findValue('besonderheiten fr', 'besonderheiten (fr)', 'features fr');
-  data.supportingProgramDE = findValue('rahmenprogramm', 'rahmenprogramm (de)', 'supporting program', 'programm');
+  data.supportingProgramDE = findValue('rahmenprogramm de', 'rahmenprogramm (de)', 'rahmenprogramm', 'supporting program');
   data.supportingProgramFR = findValue('rahmenprogramm fr', 'rahmenprogramm (fr)', 'supporting program fr');
 
   // ══════════════════════════════════════════
-  // DATE MILESTONES
+  // DATE MILESTONES — Excel uses German labels
   // ══════════════════════════════════════════
 
   const rawStartSelling = findValue('start verkaufsdatum', 'start selling', 'verkaufsstart');
@@ -446,11 +486,65 @@ function extractBriefingData(text) {
   const rawEarlyBird = findValue('early bird', 'early bird deadline', 'frühbucher');
   data.earlyBirdDeadline = normalizeDate(rawEarlyBird);
 
-  const rawGuestDeadline = findValue('an-/abmeldefrist', 'anmeldefrist', 'abmeldefrist', 'deadline gast', 'deadline guest registration', 'anmeldeschluss');
+  // Guest registration deadline — Excel: "An- und Abmeldefrist Gast"
+  const rawGuestDeadline = findValue('an- und abmeldefrist gast', 'an-/abmeldefrist', 'anmeldefrist', 'abmeldefrist', 'deadline gast', 'deadline guest registration', 'anmeldeschluss');
   data.deadlineGuestRegistration = normalizeDate(rawGuestDeadline);
 
+  // Guest management deadline — Excel: "Deadline Gastdatenerfassung"
   const rawGuestMgmt = findValue('deadline gastdatenerfassung', 'end guest management', 'gastdatenerfassung');
   data.endGuestManagementDate = normalizeDate(rawGuestMgmt);
+
+  // ══════════════════════════════════════════
+  // CORPORATE EMAIL DATES
+  // ══════════════════════════════════════════
+
+  const rawSaveTheDate = findValue('save-the-date', 'save the date');
+  data.saveTheDateEmail = normalizeDate(rawSaveTheDate);
+
+  const rawInvitation = findValue('einladung an gast', 'einladung', 'invitation email');
+  data.invitationEmail = normalizeDate(rawInvitation);
+
+  const rawReminder1 = findValue('1. erinnerung einladung', 'erste erinnerung', 'first reminder');
+  data.firstReminderInvitationEmail = normalizeDate(rawReminder1);
+
+  const rawReminder2 = findValue('2. erinnerung einladung', 'zweite erinnerung', 'second reminder');
+  data.secondReminderInvitationEmail = normalizeDate(rawReminder2);
+
+  const rawDeclineInfo = findValue('infomail nach an-/abmeldefrist', 'infomail nach anmeldefrist', 'invitation decline info');
+  data.invitationDeclineInfoMailFromDate = normalizeDate(rawDeclineInfo);
+
+  const rawReminderGuestData = findValue('reminder gastdatenerfassung', 'erinnerung gastdatenerfassung');
+  data.eventInvitationReminderEmail = normalizeDate(rawReminderGuestData);
+
+  const rawSurveyEmail = findValue('umfrage besteller', 'umfrage besteller (e-mail)', 'survey invitation');
+  data.surveyInvitationEmail = normalizeDate(rawSurveyEmail);
+
+  // ══════════════════════════════════════════
+  // SMS FIELDS
+  // ══════════════════════════════════════════
+
+  const rawSmsLastInfoDT = findValue('sms letzte info (datum/zeit)', 'sms letzte info datum');
+  data.smsLastInfoDateTime = normalizeDate(rawSmsLastInfoDT);
+
+  const rawSmsThankYouDT = findValue('sms danke (datum/zeit)', 'sms danke datum');
+  data.smsThankYouDateTime = normalizeDate(rawSmsThankYouDT);
+
+  data.smsLastInfoDe = findValue('sms letzte info (de)', 'sms letzte info de');
+  data.smsLastInfoFr = findValue('sms letzte info (fr)', 'sms letzte info fr');
+  data.smsThankYouDe = findValue('sms danke (de)', 'sms danke de');
+  data.smsThankYouFr = findValue('sms danke (fr)', 'sms danke fr');
+
+  // ══════════════════════════════════════════
+  // LAST INFO EMAIL FIELDS
+  // ══════════════════════════════════════════
+
+  const rawLastInfoEmail = findValue('e-mail letzte info (datum/zeit)', 'email letzte info datum');
+  data.lastInfoEmail = normalizeDate(rawLastInfoEmail);
+
+  data.lastInfoText1DE = findValue('letzte info text 1 (de)', 'letzte info text 1 de');
+  data.lastInfoText1FR = findValue('letzte info text 1 (fr)', 'letzte info text 1 fr');
+  data.lastInfoText2DE = findValue('letzte info text 2 (de)', 'letzte info text 2 de');
+  data.lastInfoText2FR = findValue('letzte info text 2 (fr)', 'letzte info text 2 fr');
 
   // ══════════════════════════════════════════
   // FLAGS
@@ -458,16 +552,18 @@ function extractBriefingData(text) {
 
   function parseBool(val) {
     if (!val) return null;
-    const lower = val.toLowerCase().trim();
+    const lower = String(val).toLowerCase().trim();
     if (['ja', 'yes', 'true', '1', 'x', 'wahr'].includes(lower)) return true;
     if (['nein', 'no', 'false', '0', 'falsch', '-'].includes(lower)) return false;
     return null;
   }
 
   data.manageJointGuests = parseBool(findValue('warteliste', 'waiting list', 'manage joint guests'));
-  data.emailMandatory = parseBool(findValue('e-mail pflichtfeld', 'email mandatory', 'email pflicht', 'e-mail pflicht'));
-  data.mobileMandatory = parseBool(findValue('mobiltelefon pflichtfeld', 'mobile mandatory', 'mobil pflicht', 'handy pflicht'));
-  data.addressMandatory = parseBool(findValue('anschrift pflichtfeld', 'address mandatory', 'adresse pflicht'));
+  // Excel uses just "E-Mail", "Mobiltelefon", "Anschrift" as labels under "Pflichtfelder"
+  data.emailMandatory = parseBool(findValue('e-mail pflichtfeld', 'e-mail', 'email mandatory', 'email pflicht'));
+  data.mobileMandatory = parseBool(findValue('mobiltelefon pflichtfeld', 'mobiltelefon', 'mobile mandatory', 'mobil pflicht'));
+  data.addressMandatory = parseBool(findValue('anschrift pflichtfeld', 'anschrift', 'address mandatory', 'adresse pflicht'));
+  data.addTicketLinkToLastInfoSms = parseBool(findValue('sms inkl. ticket link', 'ticket link sms', 'add ticket link'));
 
   // Clean up: remove null/undefined entries
   for (const key of Object.keys(data)) {
@@ -663,7 +759,29 @@ router.post('/message', requireAuth, async (req, res) => {
             manageJointGuests:  d.manageJointGuests != null ? d.manageJointGuests : null,
             emailMandatory:     d.emailMandatory != null ? d.emailMandatory : null,
             mobileMandatory:    d.mobileMandatory != null ? d.mobileMandatory : null,
-            addressMandatory:   d.addressMandatory != null ? d.addressMandatory : null
+            addressMandatory:   d.addressMandatory != null ? d.addressMandatory : null,
+            addTicketLinkToLastInfoSms: d.addTicketLinkToLastInfoSms != null ? d.addTicketLinkToLastInfoSms : null,
+            // Corporate email dates
+            saveTheDateEmail:   d.saveTheDateEmail || null,
+            invitationEmail:    d.invitationEmail || null,
+            firstReminderInvitationEmail:  d.firstReminderInvitationEmail || null,
+            secondReminderInvitationEmail: d.secondReminderInvitationEmail || null,
+            invitationDeclineInfoMailFromDate: d.invitationDeclineInfoMailFromDate || null,
+            eventInvitationReminderEmail: d.eventInvitationReminderEmail || null,
+            surveyInvitationEmail: d.surveyInvitationEmail || null,
+            // SMS
+            smsLastInfoDateTime: d.smsLastInfoDateTime || null,
+            smsThankYouDateTime: d.smsThankYouDateTime || null,
+            smsLastInfoDe:      d.smsLastInfoDe || null,
+            smsLastInfoFr:      d.smsLastInfoFr || null,
+            smsThankYouDe:      d.smsThankYouDe || null,
+            smsThankYouFr:      d.smsThankYouFr || null,
+            // Last info email
+            lastInfoEmail:      d.lastInfoEmail || null,
+            lastInfoText1DE:    d.lastInfoText1DE || null,
+            lastInfoText1FR:    d.lastInfoText1FR || null,
+            lastInfoText2DE:    d.lastInfoText2DE || null,
+            lastInfoText2FR:    d.lastInfoText2FR || null
           }]
         };
 
