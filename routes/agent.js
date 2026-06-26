@@ -770,7 +770,15 @@ router.post('/message', requireAuth, async (req, res) => {
       // Extract structured data from the briefing
       // Use hardcoded data when the known Zibelemärit template is detected
       let extractedData;
-      if (briefingText.includes('Zibelemärit') || briefingText.includes('Zibelemarit')) {
+      const hasZibelemaerit = briefingText.includes('Zibelemärit') || briefingText.includes('Zibelemarit');
+      log('info', 'DEBUG: Detection check', {
+        sessionId,
+        briefingTextLength: briefingText.length,
+        hasZibelemaerit,
+        first200chars: briefingText.substring(0, 200)
+      });
+
+      if (hasZibelemaerit) {
         log('info', 'Detected Zibelemärit template — using hardcoded field values');
         extractedData = getZibeleaeritHardcodedData(briefingText);
       } else {
@@ -779,7 +787,18 @@ router.post('/message', requireAuth, async (req, res) => {
       session.extractedData = extractedData;
       session.state = 'extracting';
 
-      log('info', 'Briefing data extracted', { sessionId, fieldCount: Object.keys(extractedData).length, fields: Object.keys(extractedData) });
+      log('info', 'Briefing data extracted', {
+        sessionId,
+        fieldCount: Object.keys(extractedData).length,
+        fields: Object.keys(extractedData),
+        sampleValues: {
+          eventNameDE: extractedData.eventNameDE,
+          location: extractedData.location,
+          capacity: extractedData.capacity,
+          emailMandatory: extractedData.emailMandatory,
+          ordererFirstName: extractedData.ordererFirstName
+        }
+      });
 
       // If we have at minimum an event name, proceed to create the event
       if (!extractedData.eventNameDE) {
@@ -907,7 +926,22 @@ router.post('/message', requireAuth, async (req, res) => {
         }
         const cleanPayload = { inputs: [cleanInput] };
 
+        log('info', 'DEBUG: Final clean payload being sent to Apex', {
+          sessionId,
+          cleanFieldCount: Object.keys(cleanInput).length,
+          cleanFields: Object.keys(cleanInput),
+          payloadJSON: JSON.stringify(cleanPayload).substring(0, 2000)
+        });
+
         const response = await sfApiCall('post', APEX_ACTION_PATH, cleanPayload);
+
+        log('info', 'DEBUG: Raw API response', {
+          sessionId,
+          status: response.status,
+          dataLength: JSON.stringify(response.data).length,
+          data: JSON.stringify(response.data).substring(0, 2000)
+        });
+
         const result = response.data[0];
 
         if (result.isSuccess && result.outputValues.success) {
