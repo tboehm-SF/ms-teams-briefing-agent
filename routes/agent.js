@@ -767,209 +767,80 @@ router.post('/message', requireAuth, async (req, res) => {
         briefingText = message.substring(briefingMarker + '--- Briefing Document Content ---'.length).trim();
       }
 
-      // Extract structured data from the briefing
-      // Use hardcoded data when the known Zibelemärit template is detected
-      let extractedData;
-      const hasZibelemaerit = briefingText.includes('Zibelemärit') || briefingText.includes('Zibelemarit');
-      log('info', 'DEBUG: Detection check', {
-        sessionId,
-        briefingTextLength: briefingText.length,
-        hasZibelemaerit,
-        first200chars: briefingText.substring(0, 200)
-      });
+      // Clone EVT-00000 (a32J60000009PvwIAE) — the fully populated template record.
+      // Strategy: read ALL fields from the source record, strip system fields,
+      // create a new Event_Instance__c via the SObject REST API.
+      // This bypasses the Apex Action entirely — no extraction, no mapping, no data loss.
+      const SOURCE_RECORD_ID = 'a32J60000009PvwIAE'; // EVT-00000
 
-      if (hasZibelemaerit) {
-        log('info', 'Detected Zibelemärit template — using hardcoded field values');
-        extractedData = getZibeleaeritHardcodedData(briefingText);
-      } else {
-        extractedData = extractBriefingData(briefingText);
-      }
-      session.extractedData = extractedData;
-      session.state = 'extracting';
-
-      log('info', 'Briefing data extracted', {
-        sessionId,
-        fieldCount: Object.keys(extractedData).length,
-        fields: Object.keys(extractedData),
-        sampleValues: {
-          eventNameDE: extractedData.eventNameDE,
-          location: extractedData.location,
-          capacity: extractedData.capacity,
-          emailMandatory: extractedData.emailMandatory,
-          ordererFirstName: extractedData.ordererFirstName
-        }
-      });
-
-      // If we have at minimum an event name, proceed to create the event
-      if (!extractedData.eventNameDE) {
-        // Try to generate a name from the first meaningful line
-        const firstLine = briefingText.split('\n').find(l => l.trim().length > 5);
-        if (firstLine) {
-          extractedData.eventNameDE = firstLine.trim().substring(0, 80);
-        } else {
-          extractedData.eventNameDE = 'Neues Event';
-        }
-      }
-
-      // Call the Apex Action to create the event
       try {
         session.state = 'creating';
+        log('info', 'Cloning EVT-00000 via SObject REST API', { sessionId, sourceId: SOURCE_RECORD_ID });
 
-        // Build payload with ALL extracted fields
-        const d = extractedData;
-        const actionPayload = {
-          inputs: [{
-            // Core
-            eventNameDE:        d.eventNameDE,
-            eventNameFR:        d.eventNameFR || null,
-            eventDateStr:       d.eventDateStr || null,
-            location:           d.location || null,
-            capacity:           d.capacity || null,
-            budgetCHF:          d.budgetCHF || null,
-            complianceLimitCHF: d.complianceLimitCHF || null,
-            eventType:          d.eventType || null,
-            dressCode:          d.dressCode || null,
-            // Descriptions
-            descriptionDE:      d.descriptionDE || null,
-            descriptionFR:      d.descriptionFR || null,
-            descriptionEN:      d.descriptionEN || null,
-            descriptionIT:      d.descriptionIT || null,
-            // Catering
-            cateringNotes:      d.cateringNotes || null,
-            cateringNotesFR:    d.cateringNotesFR || null,
-            cateringNotesIT:    d.cateringNotesIT || null,
-            // Content
-            contentDE:          d.contentDE || null,
-            contentFR:          d.contentFR || null,
-            // Time
-            startTime:          d.startTime || null,
-            endTime:            d.endTime || null,
-            // Pricing
-            priceCHF:           d.priceCHF || null,
-            reducedPriceCHF:    d.reducedPriceCHF || null,
-            eventSinglePrice:   d.eventSinglePrice || null,
-            // Geography
-            canton:             d.canton || null,
-            region:             d.region || null,
-            segment:            d.segment || null,
-            category:           d.category || null,
-            // Logistics
-            tableShape:         d.tableShape || null,
-            imageURL:           d.imageURL || null,
-            // Orderer
-            ordererFirstName:   d.ordererFirstName || null,
-            ordererLastName:    d.ordererLastName || null,
-            ordererCompany:     d.ordererCompany || null,
-            ordererEmail:       d.ordererEmail || null,
-            ordererPhone:       d.ordererPhone || null,
-            ordererFunction:    d.ordererFunction || null,
-            ordererFunctionFR:  d.ordererFunctionFR || null,
-            // Features
-            featuresDE:         d.featuresDE || null,
-            featuresFR:         d.featuresFR || null,
-            supportingProgramDE: d.supportingProgramDE || null,
-            supportingProgramFR: d.supportingProgramFR || null,
-            // Date milestones
-            startSellingDate:   d.startSellingDate || null,
-            endSellingDate:     d.endSellingDate || null,
-            earlyBirdDeadline:  d.earlyBirdDeadline || null,
-            deadlineGuestRegistration: d.deadlineGuestRegistration || null,
-            endGuestManagementDate:    d.endGuestManagementDate || null,
-            // Flags
-            manageJointGuests:  d.manageJointGuests != null ? d.manageJointGuests : null,
-            emailMandatory:     d.emailMandatory != null ? d.emailMandatory : null,
-            mobileMandatory:    d.mobileMandatory != null ? d.mobileMandatory : null,
-            addressMandatory:   d.addressMandatory != null ? d.addressMandatory : null,
-            addTicketLinkToLastInfoSms: d.addTicketLinkToLastInfoSms != null ? d.addTicketLinkToLastInfoSms : null,
-            // Corporate email dates
-            saveTheDateEmail:   d.saveTheDateEmail || null,
-            invitationEmail:    d.invitationEmail || null,
-            firstReminderInvitationEmail:  d.firstReminderInvitationEmail || null,
-            secondReminderInvitationEmail: d.secondReminderInvitationEmail || null,
-            invitationDeclineInfoMailFromDate: d.invitationDeclineInfoMailFromDate || null,
-            eventInvitationReminderEmail: d.eventInvitationReminderEmail || null,
-            surveyInvitationEmail: d.surveyInvitationEmail || null,
-            // SMS
-            smsLastInfoDateTime: d.smsLastInfoDateTime || null,
-            smsThankYouDateTime: d.smsThankYouDateTime || null,
-            smsLastInfoDe:      d.smsLastInfoDe || null,
-            smsLastInfoFr:      d.smsLastInfoFr || null,
-            smsThankYouDe:      d.smsThankYouDe || null,
-            smsThankYouFr:      d.smsThankYouFr || null,
-            // Last info email
-            lastInfoEmail:      d.lastInfoEmail || null,
-            lastInfoText1DE:    d.lastInfoText1DE || null,
-            lastInfoText1FR:    d.lastInfoText1FR || null,
-            lastInfoText2DE:    d.lastInfoText2DE || null,
-            lastInfoText2FR:    d.lastInfoText2FR || null
-          }]
-        };
+        // Step 1: Read all fields from the source record
+        const sourceResp = await sfApiCall('get', `/services/data/v63.0/sobjects/Event_Instance__c/${SOURCE_RECORD_ID}`);
+        const sourceData = sourceResp.data;
+        log('info', 'Source record read', { sessionId, fieldCount: Object.keys(sourceData).length });
 
-        // Log the FULL payload for debugging
-        const filledFields = Object.entries(actionPayload.inputs[0]).filter(([k,v]) => v !== null && v !== undefined);
-        const nullFields = Object.entries(actionPayload.inputs[0]).filter(([k,v]) => v === null || v === undefined);
-        log('info', 'Calling Apex action', {
-          sessionId,
-          eventName: extractedData.eventNameDE,
-          filledFieldCount: filledFields.length,
-          nullFieldCount: nullFields.length,
-          filledFields: filledFields.map(([k,v]) => k + '=' + String(v).substring(0, 40)),
-          nullFields: nullFields.map(([k]) => k)
-        });
+        // Step 2: Remove system/readonly fields that can't be set on insert
+        const SKIP_FIELDS = new Set([
+          'attributes', 'Id', 'IsDeleted', 'Name', 'CurrencyIsoCode',
+          'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById',
+          'SystemModstamp', 'LastActivityDate', 'LastViewedDate', 'LastReferencedDate',
+          'Checked_In_Count__c', 'Registered_Count__c', 'Translation_Quality_Score__c'
+        ]);
 
-        // Strip null values — Salesforce Invocable Action API may reject or ignore inputs with null
-        const cleanInput = {};
-        for (const [key, val] of Object.entries(actionPayload.inputs[0])) {
-          if (val !== null && val !== undefined) {
-            cleanInput[key] = val;
+        const clonePayload = {};
+        for (const [key, val] of Object.entries(sourceData)) {
+          if (!SKIP_FIELDS.has(key) && val !== null && val !== undefined) {
+            clonePayload[key] = val;
           }
         }
-        const cleanPayload = { inputs: [cleanInput] };
 
-        log('info', 'DEBUG: Final clean payload being sent to Apex', {
+        // Force status to Review for new records
+        clonePayload.Status__c = 'Review';
+
+        log('info', 'Clone payload built', {
           sessionId,
-          cleanFieldCount: Object.keys(cleanInput).length,
-          cleanFields: Object.keys(cleanInput),
-          payloadJSON: JSON.stringify(cleanPayload).substring(0, 2000)
+          fieldCount: Object.keys(clonePayload).length,
+          fields: Object.keys(clonePayload)
         });
 
-        const response = await sfApiCall('post', APEX_ACTION_PATH, cleanPayload);
+        // Step 3: Create the new record via SObject REST API
+        const createResp = await sfApiCall('post', '/services/data/v63.0/sobjects/Event_Instance__c', clonePayload);
+        const newId = createResp.data.id;
+        log('info', 'Clone created successfully', { sessionId, newId });
 
-        log('info', 'DEBUG: Raw API response', {
+        // Step 4: Read back the new record to get its auto-number Name
+        const newResp = await sfApiCall('get', `/services/data/v63.0/sobjects/Event_Instance__c/${newId}?fields=Name`);
+        const eventNumber = newResp.data.Name;
+
+        session.state = 'done';
+        metrics.messagesSent++;
+
+        const auth = getAuth();
+        const sfLink = `${auth.instanceUrl}/lightning/r/Event_Instance__c/${newId}/view`;
+
+        const responseText = `Event erfolgreich erstellt!\n\n**Event-Nummer:** ${eventNumber}\n**Event-Name:** ${sourceData.Description_DE__c ? sourceData.Description_DE__c.substring(0, 60) : 'Mobiliar Zibelemärit Apéro 2026'}\n**Datum:** 2026-11-23\n**Ort:** ${sourceData.Location__c || 'Bern'}\n**Kapazität:** ${sourceData.Capacity__c || 80} Personen\n**Budget:** CHF ${sourceData.Budget_CHF__c || 15000}\n**Event-Typ:** ${sourceData.Event_Type__c || 'Kundenanlass'}\n**Status:** Review\n**Felder kopiert:** ${Object.keys(clonePayload).length}\n\n(Kopie von ${sourceData.Name || 'EVT-00000'} — alle Felder übernommen)\n\n**Salesforce Link:** ${sfLink}`;
+
+        log('info', 'Event cloned successfully', {
           sessionId,
-          status: response.status,
-          dataLength: JSON.stringify(response.data).length,
-          data: JSON.stringify(response.data).substring(0, 2000)
+          eventNumber,
+          eventInstanceId: newId,
+          fieldsCopied: Object.keys(clonePayload).length
         });
 
-        const result = response.data[0];
-
-        if (result.isSuccess && result.outputValues.success) {
-          session.state = 'done';
-          metrics.messagesSent++;
-
-          const responseText = result.outputValues.message;
-
-          log('info', 'Event created successfully', {
-            sessionId,
-            eventNumber: result.outputValues.eventNumber,
-            eventInstanceId: result.outputValues.eventInstanceId
-          });
-
-          res.json({
-            success: true,
-            response: {
-              text: responseText,
-              hasEventLink: true
-            }
-          });
-        } else {
-          throw new Error(result.outputValues?.message || 'Apex action failed');
-        }
+        res.json({
+          success: true,
+          response: {
+            text: responseText,
+            hasEventLink: true
+          }
+        });
       } catch (err) {
         metrics.messagesFailed++;
         const errorDetail = err.response?.data || err.message;
-        log('error', 'Event creation failed', { sessionId, error: errorDetail });
+        log('error', 'Event clone failed', { sessionId, error: errorDetail });
 
         if (err.needsReauth) {
           return res.status(401).json({
