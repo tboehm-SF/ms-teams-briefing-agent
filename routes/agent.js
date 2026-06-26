@@ -9,6 +9,11 @@ const APEX_ACTION_PATH = '/services/data/v63.0/actions/custom/apex/CreateHospita
 // Valid picklist values (from Salesforce org)
 const VALID_DRESS_CODES = ['Business', 'Smart Casual', 'Casual', 'Formal'];
 const VALID_EVENT_TYPES = ['Kundenanlass', 'Networking', 'Webinar', 'Messe', 'Generalversammlung', 'Mitarbeiteranlass'];
+const VALID_CANTONS = ['AG','AI','AR','BE','BL','BS','FR','GE','GL','GR','JU','LU','NE','NW','OW','SG','SH','SO','SZ','TG','TI','UR','VD','VS','ZG','ZH'];
+const VALID_REGIONS = ['German-speaking Switzerland', 'French-speaking Switzerland', 'Italian-speaking Switzerland'];
+const VALID_SEGMENTS = ['Family', 'Young people', 'Corporate Business'];
+const VALID_CATEGORIES = ['Sports', 'EntertainmentCulture', 'SpecialOffer'];
+const VALID_TABLE_SHAPES = ['Round', 'Rectangular'];
 
 // Concurrency control
 const MAX_CONCURRENT_REQUESTS = 10;
@@ -136,108 +141,188 @@ function requireAuth(req, res, next) {
 }
 
 /**
+ * Parse a Swiss/German number format: 5'000.00 or 5.000,00 or 5000
+ */
+function parseSwissNumber(str) {
+  if (!str) return null;
+  // Remove CHF prefix/suffix and whitespace
+  let s = str.replace(/CHF/gi, '').trim();
+  if (!s) return null;
+  // Remove thousands separators (apostrophe or dot when followed by 3 digits)
+  s = s.replace(/[']/g, '');
+  // If format is "1.234,56" (German), convert comma to dot
+  if (s.includes(',') && s.includes('.')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (s.includes(',')) {
+    s = s.replace(',', '.');
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+/**
+ * Convert a date string (German or ISO) to ISO format
+ */
+function normalizeDate(str) {
+  if (!str) return null;
+  const s = str.trim();
+  // German format: DD.MM.YYYY [HH:mm]
+  const gm = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (gm) {
+    const [, day, month, year, hour, min] = gm;
+    let iso = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    if (hour) iso += `T${hour.padStart(2, '0')}:${min}:00`;
+    else iso += 'T00:00:00';
+    return iso;
+  }
+  // ISO format
+  const im = s.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}(?::\d{2})?))?/);
+  if (im) {
+    return im[2] ? `${im[1]}T${im[2]}` : `${im[1]}T00:00:00`;
+  }
+  return null;
+}
+
+/**
+ * Extract a time string like "17:30" or "17.30"
+ */
+function normalizeTime(str) {
+  if (!str) return null;
+  const m = str.trim().match(/(\d{1,2})[:.h](\d{2})/);
+  if (m) return `${m[1].padStart(2, '0')}:${m[2]}`;
+  return null;
+}
+
+/**
+ * Try to match a value to a picklist. Returns the matched value or null.
+ */
+function matchPicklist(val, validValues) {
+  if (!val) return null;
+  const lower = val.trim().toLowerCase();
+  // Exact match
+  const exact = validValues.find(v => v.toLowerCase() === lower);
+  if (exact) return exact;
+  // Contains match
+  const contains = validValues.find(v => lower.includes(v.toLowerCase()));
+  return contains || null;
+}
+
+/**
  * Extract structured event data from briefing text.
- * Uses pattern matching to pull out dates, locations, capacities, budgets, etc.
+ * Handles both label:value patterns AND CSV table data from Excel uploads.
+ * Maps to ALL available fields on Event_Instance__c.
  */
 function extractBriefingData(text) {
   const data = {};
 
-  // Event name — look for common patterns
-  const namePatterns = [
-    /(?:Event(?:-?Name)?|Veranstaltung|Anlass|Titel)\s*[:=]\s*["']?(.+?)["']?\s*$/im,
-    /^(?:Name|Titel|Event)\s*[:]\s*(.+)$/im
-  ];
-  for (const p of namePatterns) {
-    const m = text.match(p);
-    if (m) { data.eventNameDE = m[1].trim(); break; }
+  // Build a lookup map from the text: key → value
+  // This handles CSV (key,value per row), label: value, and label = value formats
+  const kvMap = new Map();
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Try CSV format: "Key,Value" or "Key;Value"
+    const csvMatch = trimmed.match(/^"?([^",;]+)"?\s*[,;]\s*"?(.+?)"?\s*$/);
+    if (csvMatch) {
+      kvMap.set(csvMatch[1].trim().toLowerCase(), csvMatch[2].trim());
+    }
+
+    // Try label: value or label = value
+    const labelMatch = trimmed.match(/^([^:=]+?)\s*[:=]\s*(.+)$/);
+    if (labelMatch) {
+      kvMap.set(labelMatch[1].trim().toLowerCase(), labelMatch[2].trim());
+    }
   }
 
-  // Date — ISO or German format
-  const datePatterns = [
-    /(?:Datum|Date|Termin|Wann)\s*[:=]\s*(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?)?)/i,
-    /(?:Datum|Date|Termin|Wann)\s*[:=]\s*(\d{1,2}\.\d{1,2}\.\d{4}(?:\s+\d{1,2}:\d{2})?)/i,
-    /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?)/,
-    /(\d{1,2}\.\d{1,2}\.\d{4})/
-  ];
-  for (const p of datePatterns) {
-    const m = text.match(p);
-    if (m) {
-      let ds = m[1].trim();
-      // Convert German date format to ISO
-      const germanMatch = ds.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/);
-      if (germanMatch) {
-        const [, day, month, year, hour, min] = germanMatch;
-        ds = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-        if (hour) ds += `T${hour.padStart(2, '0')}:${min}:00`;
-        else ds += 'T00:00:00';
-      } else if (!ds.includes('T')) {
-        ds += 'T00:00:00';
+  // Helper: find a value by trying multiple possible keys
+  function findValue(...keys) {
+    for (const key of keys) {
+      const lower = key.toLowerCase();
+      // Exact match
+      if (kvMap.has(lower)) return kvMap.get(lower);
+      // Partial match — find any key that contains the search term
+      for (const [k, v] of kvMap) {
+        if (k.includes(lower) || lower.includes(k)) return v;
       }
-      data.eventDateStr = ds;
-      break;
     }
+    return null;
+  }
+
+  // Also use regex on the full text as fallback
+  function regexFind(patterns) {
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (m) return m[1].trim();
+    }
+    return null;
+  }
+
+  // ══════════════════════════════════════════
+  // CORE FIELDS
+  // ══════════════════════════════════════════
+
+  // Event name
+  data.eventNameDE = findValue('event-name', 'event name', 'eventname', 'veranstaltung', 'anlass', 'titel', 'name', 'event name (de)', 'event-name (de)')
+    || regexFind([
+      /(?:Event(?:-?Name)?|Veranstaltung|Anlass|Titel)\s*[:=]\s*["']?(.+?)["']?\s*$/im,
+      /^(?:Name|Titel|Event)\s*[:]\s*(.+)$/im
+    ]);
+
+  // Event name FR
+  data.eventNameFR = findValue('event name (fr)', 'event-name (fr)', 'eventname fr', 'name fr', 'nom', 'titre fr');
+
+  // Date
+  const rawDate = findValue('datum', 'date', 'termin', 'event-datum', 'event datum', 'event date', 'eventdatum', 'wann')
+    || regexFind([
+      /(?:Datum|Date|Termin|Wann)\s*[:=]\s*(\S+(?:\s+\d{1,2}:\d{2})?)/i
+    ]);
+  data.eventDateStr = normalizeDate(rawDate);
+
+  // Start time
+  const rawStartTime = findValue('startzeit', 'start time', 'beginn', 'anfang', 'von', 'start', 'uhrzeit', 'zeit');
+  data.startTime = normalizeTime(rawStartTime);
+
+  // End time
+  const rawEndTime = findValue('endzeit', 'end time', 'ende', 'bis', 'schluss');
+  data.endTime = normalizeTime(rawEndTime);
+
+  // If we found start time but no separate date+time, embed time into date
+  if (data.startTime && data.eventDateStr && data.eventDateStr.endsWith('T00:00:00')) {
+    data.eventDateStr = data.eventDateStr.replace('T00:00:00', `T${data.startTime}:00`);
   }
 
   // Location
-  const locPatterns = [
-    /(?:Ort|Location|Veranstaltungsort|Venue|Wo|Standort|Adresse)\s*[:=]\s*(.+?)$/im
-  ];
-  for (const p of locPatterns) {
-    const m = text.match(p);
-    if (m) { data.location = m[1].trim(); break; }
-  }
+  data.location = findValue('ort', 'location', 'veranstaltungsort', 'venue', 'standort', 'adresse', 'wo', 'plz/ort')
+    || regexFind([/(?:Ort|Location|Veranstaltungsort|Venue|Wo|Standort|Adresse)\s*[:=]\s*(.+?)$/im]);
 
   // Capacity
-  const capPatterns = [
-    /(?:Kapazit[aä]t|Capacity|Teilnehmer|Personen|G[aä]ste|Anzahl)\s*[:=]\s*(\d+)/i,
-    /(\d+)\s*(?:Personen|Teilnehmer|G[aä]ste|persons|guests|attendees)/i
-  ];
-  for (const p of capPatterns) {
-    const m = text.match(p);
-    if (m) { data.capacity = parseInt(m[1]); break; }
+  const rawCap = findValue('kapazität', 'kapazitaet', 'capacity', 'teilnehmer', 'personen', 'gäste', 'gaeste', 'anzahl', 'max. teilnehmer', 'max teilnehmer', 'plätze', 'plaetze')
+    || regexFind([
+      /(?:Kapazit[aä]t|Capacity|Teilnehmer|Anzahl)\s*[:=]\s*(\d+)/i,
+      /(\d+)\s*(?:Personen|Teilnehmer|G[aä]ste)/i
+    ]);
+  if (rawCap) {
+    const n = parseInt(rawCap);
+    if (!isNaN(n)) data.capacity = n;
   }
 
   // Budget
-  const budgetPatterns = [
-    /(?:Budget|Gesamtbudget)\s*[:=]\s*(?:CHF\s*)?([0-9.,]+)/i,
-    /(?:Budget|Gesamtbudget)\s*[:=]\s*([0-9.,]+)\s*(?:CHF)?/i
-  ];
-  for (const p of budgetPatterns) {
-    const m = text.match(p);
-    if (m) {
-      data.budgetCHF = parseFloat(m[1].replace(/[.']/g, '').replace(',', '.'));
-      break;
-    }
-  }
+  const rawBudget = findValue('budget', 'gesamtbudget', 'budget chf', 'budget (chf)')
+    || regexFind([/(?:Budget|Gesamtbudget)\s*[:=]\s*(?:CHF\s*)?([0-9.,'']+)/i]);
+  data.budgetCHF = parseSwissNumber(rawBudget);
 
   // Compliance limit
-  const compPatterns = [
-    /(?:Compliance[- ]?Limit[e]?|Pro[- ]Person[- ]Limit)\s*[:=]\s*(?:CHF\s*)?([0-9.,]+)/i
-  ];
-  for (const p of compPatterns) {
-    const m = text.match(p);
-    if (m) {
-      data.complianceLimitCHF = parseFloat(m[1].replace(/[.']/g, '').replace(',', '.'));
-      break;
-    }
-  }
+  const rawComp = findValue('compliance-limite', 'compliance limite', 'compliance limit', 'compliance', 'pro-person-limit', 'pro person limit', 'limite', 'compliance-limite (chf)', 'compliance limit chf')
+    || regexFind([/(?:Compliance[- ]?Limit[e]?|Pro[- ]Person[- ]Limit)\s*[:=]\s*(?:CHF\s*)?([0-9.,'']+)/i]);
+  data.complianceLimitCHF = parseSwissNumber(rawComp);
 
   // Event type
-  const typePatterns = [
-    /(?:Event[- ]?Typ|Typ|Art|Type|Kategorie)\s*[:=]\s*(.+?)$/im
-  ];
-  for (const p of typePatterns) {
-    const m = text.match(p);
-    if (m) {
-      const val = m[1].trim();
-      // Try to match to a valid picklist type
-      const match = VALID_EVENT_TYPES.find(t => t.toLowerCase() === val.toLowerCase() || val.toLowerCase().includes(t.toLowerCase()));
-      data.eventType = match || 'Kundenanlass'; // default
-      break;
-    }
-  }
-  // Also scan for type keywords in full text
+  const rawType = findValue('event-typ', 'event typ', 'eventtyp', 'typ', 'art', 'type', 'event type', 'veranstaltungstyp');
+  data.eventType = matchPicklist(rawType, VALID_EVENT_TYPES);
   if (!data.eventType) {
+    // Scan full text for keywords
     for (const t of VALID_EVENT_TYPES) {
       if (text.toLowerCase().includes(t.toLowerCase())) {
         data.eventType = t;
@@ -246,48 +331,149 @@ function extractBriefingData(text) {
     }
   }
 
-  // Dress code — map to valid picklist values: Business, Smart Casual, Casual, Formal
-  const dressPatterns = [
-    /(?:Dress[- ]?Code|Kleiderordnung|Kleidung)\s*[:=]\s*(.+?)$/im
-  ];
-  for (const p of dressPatterns) {
-    const m = text.match(p);
-    if (m) {
-      const raw = m[1].trim().toLowerCase();
-      // Map common variations to valid picklist values
-      if (raw.includes('formal') || raw.includes('abend')) {
-        data.dressCode = 'Formal';
-      } else if (raw.includes('smart casual') || raw.includes('business casual') || raw.includes('smart')) {
-        data.dressCode = 'Smart Casual';
-      } else if (raw.includes('business')) {
-        data.dressCode = 'Business';
-      } else if (raw.includes('casual') || raw.includes('leger') || raw.includes('zwanglos')) {
-        data.dressCode = 'Casual';
-      } else {
-        // Try exact match
-        const match = VALID_DRESS_CODES.find(v => v.toLowerCase() === raw);
-        data.dressCode = match || 'Smart Casual'; // default
-      }
-      break;
-    }
+  // Dress code
+  const rawDress = findValue('dress code', 'dresscode', 'dress-code', 'kleiderordnung', 'kleidung');
+  if (rawDress) {
+    const lower = rawDress.toLowerCase();
+    if (lower.includes('formal') || lower.includes('abend')) data.dressCode = 'Formal';
+    else if (lower.includes('smart casual') || lower.includes('business casual')) data.dressCode = 'Smart Casual';
+    else if (lower.includes('business')) data.dressCode = 'Business';
+    else if (lower.includes('casual') || lower.includes('leger')) data.dressCode = 'Casual';
+    else data.dressCode = matchPicklist(rawDress, VALID_DRESS_CODES) || rawDress;
   }
 
   // Catering
-  const cateringPatterns = [
-    /(?:Catering|Verpflegung|Essen|Menu)\s*[:=]\s*(.+?)$/im
-  ];
-  for (const p of cateringPatterns) {
-    const m = text.match(p);
-    if (m) { data.cateringNotes = m[1].trim(); break; }
+  data.cateringNotes = findValue('catering', 'catering-notizen', 'catering notizen', 'verpflegung', 'essen', 'menu', 'menü')
+    || regexFind([/(?:Catering|Verpflegung|Essen|Menu)\s*[:=]\s*(.+?)$/im]);
+
+  data.cateringNotesFR = findValue('catering fr', 'catering (fr)', 'notes catering (fr)', 'notes catering fr');
+  data.cateringNotesIT = findValue('catering it', 'catering (it)', 'note catering (it)', 'note catering it');
+
+  // Description
+  data.descriptionDE = findValue('beschreibung', 'beschreibung (de)', 'description', 'zusammenfassung', 'beschreibung de')
+    || regexFind([/(?:Beschreibung|Description|Zusammenfassung)\s*[:=]\s*(.+?)$/im]);
+  data.descriptionFR = findValue('beschreibung fr', 'beschreibung (fr)', 'description fr', 'description (fr)');
+  data.descriptionIT = findValue('beschreibung it', 'beschreibung (it)', 'descrizione', 'descrizione (it)');
+  data.descriptionEN = findValue('beschreibung en', 'beschreibung (en)', 'description en', 'description (en)');
+
+  // Content
+  data.contentDE = findValue('inhalt', 'inhalt (de)', 'inhalt de', 'content de', 'content');
+  data.contentFR = findValue('inhalt fr', 'inhalt (fr)', 'content fr');
+
+  // ══════════════════════════════════════════
+  // GEOGRAPHY / SEGMENT
+  // ══════════════════════════════════════════
+
+  const rawCanton = findValue('kanton', 'canton', 'kt');
+  data.canton = rawCanton ? (matchPicklist(rawCanton, VALID_CANTONS) || rawCanton.toUpperCase().substring(0, 2)) : null;
+
+  const rawRegion = findValue('region', 'sprachregion');
+  data.region = rawRegion ? (matchPicklist(rawRegion, VALID_REGIONS) || rawRegion) : null;
+
+  const rawSegment = findValue('segment', 'zielgruppe');
+  data.segment = rawSegment ? (matchPicklist(rawSegment, VALID_SEGMENTS) || rawSegment) : null;
+
+  const rawCategory = findValue('kategorie', 'category', 'kat');
+  data.category = rawCategory ? (matchPicklist(rawCategory, VALID_CATEGORIES) || rawCategory) : null;
+
+  // ══════════════════════════════════════════
+  // PRICING
+  // ══════════════════════════════════════════
+
+  const rawPrice = findValue('preis', 'price', 'price chf', 'preis chf', 'price (chf)', 'preis (chf)');
+  data.priceCHF = parseSwissNumber(rawPrice);
+
+  const rawReducedPrice = findValue('reduzierter preis', 'reduced price', 'ermässigter preis', 'reduced price chf');
+  data.reducedPriceCHF = parseSwissNumber(rawReducedPrice);
+
+  const rawSinglePrice = findValue('einzelpreis', 'event einzelpreis', 'single price', 'event single price');
+  data.eventSinglePrice = parseSwissNumber(rawSinglePrice);
+
+  // ══════════════════════════════════════════
+  // LOGISTICS
+  // ══════════════════════════════════════════
+
+  const rawTable = findValue('tischform', 'table shape', 'tische');
+  data.tableShape = rawTable ? (matchPicklist(rawTable, VALID_TABLE_SHAPES) || rawTable) : null;
+
+  data.imageURL = findValue('image url', 'bild url', 'bild', 'image', 'eventbild');
+
+  // ══════════════════════════════════════════
+  // ORDERER / AUFTRAGGEBER
+  // ══════════════════════════════════════════
+
+  data.ordererFirstName = findValue('auftraggeber vorname', 'orderer first name', 'vorname auftraggeber', 'besteller vorname');
+  data.ordererLastName = findValue('auftraggeber nachname', 'orderer last name', 'nachname auftraggeber', 'besteller nachname');
+  data.ordererCompany = findValue('auftraggeber firma', 'orderer company', 'firma auftraggeber', 'besteller firma', 'firma');
+  data.ordererEmail = findValue('auftraggeber e-mail', 'auftraggeber email', 'orderer email', 'e-mail auftraggeber', 'besteller email');
+  data.ordererPhone = findValue('auftraggeber telefon', 'orderer phone', 'telefon auftraggeber', 'besteller telefon');
+  data.ordererFunction = findValue('auftraggeber funktion', 'auftraggeber funktion (de)', 'orderer function', 'funktion auftraggeber');
+  data.ordererFunctionFR = findValue('auftraggeber funktion (fr)', 'orderer function fr', 'funktion auftraggeber fr');
+
+  // Also try combined "Auftraggeber" field and split first/last name
+  if (!data.ordererFirstName && !data.ordererLastName) {
+    const combined = findValue('auftraggeber', 'besteller', 'orderer', 'kontaktperson');
+    if (combined) {
+      const parts = combined.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        data.ordererFirstName = parts[0];
+        data.ordererLastName = parts.slice(1).join(' ');
+      } else {
+        data.ordererLastName = combined;
+      }
+    }
   }
 
-  // Description — look for explicit description or use remaining context
-  const descPatterns = [
-    /(?:Beschreibung|Description|Zusammenfassung)\s*[:=]\s*(.+?)$/im
-  ];
-  for (const p of descPatterns) {
-    const m = text.match(p);
-    if (m) { data.descriptionDE = m[1].trim(); break; }
+  // ══════════════════════════════════════════
+  // FEATURES / SUPPORTING PROGRAMME
+  // ══════════════════════════════════════════
+
+  data.featuresDE = findValue('besonderheiten', 'besonderheiten (de)', 'features', 'features de');
+  data.featuresFR = findValue('besonderheiten fr', 'besonderheiten (fr)', 'features fr');
+  data.supportingProgramDE = findValue('rahmenprogramm', 'rahmenprogramm (de)', 'supporting program', 'programm');
+  data.supportingProgramFR = findValue('rahmenprogramm fr', 'rahmenprogramm (fr)', 'supporting program fr');
+
+  // ══════════════════════════════════════════
+  // DATE MILESTONES
+  // ══════════════════════════════════════════
+
+  const rawStartSelling = findValue('start verkaufsdatum', 'start selling', 'verkaufsstart');
+  data.startSellingDate = normalizeDate(rawStartSelling);
+
+  const rawEndSelling = findValue('ende verkaufsdatum', 'end selling', 'verkaufsende');
+  data.endSellingDate = normalizeDate(rawEndSelling);
+
+  const rawEarlyBird = findValue('early bird', 'early bird deadline', 'frühbucher');
+  data.earlyBirdDeadline = normalizeDate(rawEarlyBird);
+
+  const rawGuestDeadline = findValue('an-/abmeldefrist', 'anmeldefrist', 'abmeldefrist', 'deadline gast', 'deadline guest registration', 'anmeldeschluss');
+  data.deadlineGuestRegistration = normalizeDate(rawGuestDeadline);
+
+  const rawGuestMgmt = findValue('deadline gastdatenerfassung', 'end guest management', 'gastdatenerfassung');
+  data.endGuestManagementDate = normalizeDate(rawGuestMgmt);
+
+  // ══════════════════════════════════════════
+  // FLAGS
+  // ══════════════════════════════════════════
+
+  function parseBool(val) {
+    if (!val) return null;
+    const lower = val.toLowerCase().trim();
+    if (['ja', 'yes', 'true', '1', 'x', 'wahr'].includes(lower)) return true;
+    if (['nein', 'no', 'false', '0', 'falsch', '-'].includes(lower)) return false;
+    return null;
+  }
+
+  data.manageJointGuests = parseBool(findValue('warteliste', 'waiting list', 'manage joint guests'));
+  data.emailMandatory = parseBool(findValue('e-mail pflichtfeld', 'email mandatory', 'email pflicht', 'e-mail pflicht'));
+  data.mobileMandatory = parseBool(findValue('mobiltelefon pflichtfeld', 'mobile mandatory', 'mobil pflicht', 'handy pflicht'));
+  data.addressMandatory = parseBool(findValue('anschrift pflichtfeld', 'address mandatory', 'adresse pflicht'));
+
+  // Clean up: remove null/undefined entries
+  for (const key of Object.keys(data)) {
+    if (data[key] === null || data[key] === undefined) {
+      delete data[key];
+    }
   }
 
   return data;
@@ -299,7 +485,10 @@ function extractBriefingData(text) {
 function generateExtractionSummary(data) {
   const fields = [];
   if (data.eventNameDE) fields.push(`**Event-Name:** ${data.eventNameDE}`);
+  if (data.eventNameFR) fields.push(`**Event-Name (FR):** ${data.eventNameFR}`);
   if (data.eventDateStr) fields.push(`**Datum:** ${data.eventDateStr}`);
+  if (data.startTime) fields.push(`**Startzeit:** ${data.startTime}`);
+  if (data.endTime) fields.push(`**Endzeit:** ${data.endTime}`);
   if (data.location) fields.push(`**Ort:** ${data.location}`);
   if (data.capacity) fields.push(`**Kapazität:** ${data.capacity} Personen`);
   if (data.budgetCHF) fields.push(`**Budget:** CHF ${data.budgetCHF.toLocaleString()}`);
@@ -307,12 +496,26 @@ function generateExtractionSummary(data) {
   if (data.eventType) fields.push(`**Event-Typ:** ${data.eventType}`);
   if (data.dressCode) fields.push(`**Dress Code:** ${data.dressCode}`);
   if (data.cateringNotes) fields.push(`**Catering:** ${data.cateringNotes}`);
+  if (data.canton) fields.push(`**Kanton:** ${data.canton}`);
+  if (data.region) fields.push(`**Region:** ${data.region}`);
+  if (data.segment) fields.push(`**Segment:** ${data.segment}`);
+  if (data.category) fields.push(`**Kategorie:** ${data.category}`);
+  if (data.priceCHF) fields.push(`**Preis:** CHF ${data.priceCHF}`);
+  if (data.tableShape) fields.push(`**Tischform:** ${data.tableShape}`);
+  if (data.ordererFirstName || data.ordererLastName) {
+    const name = [data.ordererFirstName, data.ordererLastName].filter(Boolean).join(' ');
+    fields.push(`**Auftraggeber:** ${name}`);
+  }
+  if (data.ordererCompany) fields.push(`**Firma:** ${data.ordererCompany}`);
+  if (data.descriptionDE) fields.push(`**Beschreibung:** ${data.descriptionDE.substring(0, 80)}${data.descriptionDE.length > 80 ? '...' : ''}`);
+
+  const totalFields = Object.keys(data).length;
 
   if (fields.length === 0) {
     return 'Ich konnte keine Event-Details aus dem Dokument extrahieren. Bitte stellen Sie sicher, dass das Briefing Informationen wie Event-Name, Datum, Ort und Kapazität enthält.';
   }
 
-  let summary = 'Ich habe folgende Event-Details aus dem Briefing extrahiert:\n\n';
+  let summary = `Ich habe **${totalFields} Felder** aus dem Briefing extrahiert:\n\n`;
   summary += fields.join('\n');
   summary += '\n\nIch erstelle jetzt das Event in Salesforce...';
   return summary;
@@ -396,18 +599,71 @@ router.post('/message', requireAuth, async (req, res) => {
       try {
         session.state = 'creating';
 
+        // Build payload with ALL extracted fields
+        const d = extractedData;
         const actionPayload = {
           inputs: [{
-            eventNameDE: extractedData.eventNameDE,
-            eventDateStr: extractedData.eventDateStr || null,
-            location: extractedData.location || null,
-            capacity: extractedData.capacity || null,
-            budgetCHF: extractedData.budgetCHF || null,
-            complianceLimitCHF: extractedData.complianceLimitCHF || null,
-            eventType: extractedData.eventType || null,
-            dressCode: extractedData.dressCode || null,
-            cateringNotes: extractedData.cateringNotes || null,
-            descriptionDE: extractedData.descriptionDE || null
+            // Core
+            eventNameDE:        d.eventNameDE,
+            eventNameFR:        d.eventNameFR || null,
+            eventDateStr:       d.eventDateStr || null,
+            location:           d.location || null,
+            capacity:           d.capacity || null,
+            budgetCHF:          d.budgetCHF || null,
+            complianceLimitCHF: d.complianceLimitCHF || null,
+            eventType:          d.eventType || null,
+            dressCode:          d.dressCode || null,
+            // Descriptions
+            descriptionDE:      d.descriptionDE || null,
+            descriptionFR:      d.descriptionFR || null,
+            descriptionEN:      d.descriptionEN || null,
+            descriptionIT:      d.descriptionIT || null,
+            // Catering
+            cateringNotes:      d.cateringNotes || null,
+            cateringNotesFR:    d.cateringNotesFR || null,
+            cateringNotesIT:    d.cateringNotesIT || null,
+            // Content
+            contentDE:          d.contentDE || null,
+            contentFR:          d.contentFR || null,
+            // Time
+            startTime:          d.startTime || null,
+            endTime:            d.endTime || null,
+            // Pricing
+            priceCHF:           d.priceCHF || null,
+            reducedPriceCHF:    d.reducedPriceCHF || null,
+            eventSinglePrice:   d.eventSinglePrice || null,
+            // Geography
+            canton:             d.canton || null,
+            region:             d.region || null,
+            segment:            d.segment || null,
+            category:           d.category || null,
+            // Logistics
+            tableShape:         d.tableShape || null,
+            imageURL:           d.imageURL || null,
+            // Orderer
+            ordererFirstName:   d.ordererFirstName || null,
+            ordererLastName:    d.ordererLastName || null,
+            ordererCompany:     d.ordererCompany || null,
+            ordererEmail:       d.ordererEmail || null,
+            ordererPhone:       d.ordererPhone || null,
+            ordererFunction:    d.ordererFunction || null,
+            ordererFunctionFR:  d.ordererFunctionFR || null,
+            // Features
+            featuresDE:         d.featuresDE || null,
+            featuresFR:         d.featuresFR || null,
+            supportingProgramDE: d.supportingProgramDE || null,
+            supportingProgramFR: d.supportingProgramFR || null,
+            // Date milestones
+            startSellingDate:   d.startSellingDate || null,
+            endSellingDate:     d.endSellingDate || null,
+            earlyBirdDeadline:  d.earlyBirdDeadline || null,
+            deadlineGuestRegistration: d.deadlineGuestRegistration || null,
+            endGuestManagementDate:    d.endGuestManagementDate || null,
+            // Flags
+            manageJointGuests:  d.manageJointGuests != null ? d.manageJointGuests : null,
+            emailMandatory:     d.emailMandatory != null ? d.emailMandatory : null,
+            mobileMandatory:    d.mobileMandatory != null ? d.mobileMandatory : null,
+            addressMandatory:   d.addressMandatory != null ? d.addressMandatory : null
           }]
         };
 
